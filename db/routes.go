@@ -134,13 +134,14 @@ func (s *Store) GetCrossIATANeighbors(ctx context.Context, nodeID uuid.UUID, iat
 	}
 	items := make([]api.NodeNeighbor, 0, len(rows))
 	for _, r := range rows {
+		lat, lng := api.RedactLocation(r.Name, r.Latitude, r.Longitude)
 		items = append(items, api.NodeNeighbor{
 			ID:               r.ID,
 			Name:             r.Name,
 			NodeType:         r.NodeType,
 			NodeTypeName:     api.NodeTypeName(r.NodeType),
-			Latitude:         r.Latitude,
-			Longitude:        r.Longitude,
+			Latitude:         lat,
+			Longitude:        lng,
 			IATA:             r.NeighborIata,
 			ObservationCount: r.ObservationCount,
 			LastSeen:         r.LastSeen.Time.UnixMilli(),

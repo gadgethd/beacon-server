@@ -42,11 +42,12 @@ func (s *Store) ResolvePathHashes(ctx context.Context, iata string, hashes [][]b
 	result := make(map[string][]api.ResolvedPathEntry)
 	for _, row := range rows {
 		key := hex.EncodeToString(row.Hash[:len(hashes[0])])
+		lat, lng := api.RedactLocation(row.Name, row.Latitude, row.Longitude)
 		result[key] = append(result[key], api.ResolvedPathEntry{
 			NodeID:    row.NodeID,
 			Name:      row.Name,
-			Latitude:  row.Latitude,
-			Longitude: row.Longitude,
+			Latitude:  lat,
+			Longitude: lng,
 			PublicKey: row.PublicKey,
 		})
 	}

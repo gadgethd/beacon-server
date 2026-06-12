@@ -137,15 +137,20 @@ func (w *Worker) handlePayloadTypeSideEffects(ctx context.Context, packet *meshc
 			s := fmt.Sprintf("%.1f,%g,%d", radio.FreqMHz, radio.BWKHz, radio.SF)
 			radioStr = &s
 		}
+		advertName := advert.AppData().Name
+		// Strip coordinates from the broadcast when the node name opts out, so the live map and
+		// nodes list stay redacted in step with the REST responses (clients keep the last-known
+		// location otherwise, so the event must carry nil rather than omit the update).
+		evtLat, evtLng := api.RedactLocation(&advertName, lat, lon)
 		evt := nodeUpdateEvent{
 			NodeID:       nodeID.String(),
 			PublicKey:    pubkeyHex,
-			Name:         advert.AppData().Name,
+			Name:         advertName,
 			NodeType:     advert.Type(),
 			NodeTypeName: api.NodeTypeName(int16(advert.Type())),
 			IATA:         iata,
-			Lat:          lat,
-			Lng:          lon,
+			Lat:          evtLat,
+			Lng:          evtLng,
 			IsObserver:   isObserver,
 			IATAs:        []api.NodeIATA{{IATA: iata, LastHeard: time.Now().UnixMilli()}},
 			DefaultScope: defaultScope,

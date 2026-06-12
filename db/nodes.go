@@ -127,6 +127,7 @@ func (s *Store) ListNodes(ctx context.Context, nodeType int16, iatas []string, s
 			s := fmt.Sprintf("%.1f,%g,%d", *v.RadioFreqMhz, *v.RadioBwKhz, *v.RadioSf)
 			node.Radio = &s
 		}
+		node.Latitude, node.Longitude = api.RedactLocation(node.Name, node.Latitude, node.Longitude)
 		items = append(items, node)
 	}
 	var nextCursor *int64
@@ -188,6 +189,10 @@ func (s *Store) GetNode(ctx context.Context, nodeID uuid.UUID) (*api.Node, error
 		ms := row.LastAdvertAt.Time.UnixMilli()
 		node.LastAdvertAt = &ms
 	}
+	node.Latitude, node.Longitude = api.RedactLocation(node.Name, node.Latitude, node.Longitude)
+	if api.LocationRedacted(node.Name) {
+		node.LocationSource = nil // hide the whole Location section, not just the coordinates
+	}
 	return node, nil
 }
 
@@ -198,12 +203,13 @@ func (s *Store) GetNodesByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UU
 	}
 	result := make(map[uuid.UUID]*api.ResolvedNode, len(rows))
 	for _, r := range rows {
+		lat, lng := api.RedactLocation(r.Name, r.Latitude, r.Longitude)
 		result[r.ID] = &api.ResolvedNode{
 			ID:        r.ID,
 			Name:      r.Name,
 			PublicKey: hex.EncodeToString(r.PublicKey),
-			Latitude:  r.Latitude,
-			Longitude: r.Longitude,
+			Latitude:  lat,
+			Longitude: lng,
 		}
 	}
 	return result, nil
@@ -229,14 +235,15 @@ func (s *Store) GetNodeNeighbors(ctx context.Context, nodeID uuid.UUID) ([]api.N
 			continue
 		}
 		seen[r.ID] = len(items)
+		lat, lng := api.RedactLocation(r.Name, r.Latitude, r.Longitude)
 		items = append(items, api.NodeNeighbor{
 			ID:               r.ID,
 			Name:             r.Name,
 			PublicKey:        hex.EncodeToString(r.PublicKey),
 			NodeType:         r.NodeType,
 			NodeTypeName:     api.NodeTypeName(r.NodeType),
-			Latitude:         r.Latitude,
-			Longitude:        r.Longitude,
+			Latitude:         lat,
+			Longitude:        lng,
 			IATA:             r.Iata,
 			ObservationCount: r.ObservationCount,
 			FirstSeen:        r.FirstSeen.Time.UnixMilli(),

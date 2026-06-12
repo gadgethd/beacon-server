@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -204,51 +205,30 @@ func main() {
 	keys := keystore.NewMapKeyStore(entries)
 
 	// ── Build geographic ingest filter ───────────────────────────────────────────────────────────
-	allowedIATAs := iatadb.BuildAllowedSet(cfg.Ingest.AllowCountries, cfg.Ingest.AllowContinents)
+	allowedIATAs := buildAllowedIATAs(cfg.Ingest)
 	if allowedIATAs != nil {
-		log.Printf("config: ingest filter active — %d allowed IATAs (countries=%v continents=%v)",
-			len(allowedIATAs), cfg.Ingest.AllowCountries, cfg.Ingest.AllowContinents)
+		log.Printf("config: ingest IATA filter active — %d allowed IATAs (countries=%v continents=%v explicit=%v)",
+			len(allowedIATAs), cfg.Ingest.AllowCountries, cfg.Ingest.AllowContinents, cfg.Ingest.AllowIATAs)
 	} else {
-		log.Printf("config: ingest filter inactive — accepting all IATAs")
+		log.Printf("config: ingest IATA filter inactive — accepting all IATAs")
+	}
+	allowedObserverPubkeys := buildAllowedObserverPubkeys(cfg.Ingest.AllowObserverPubkeys)
+	if allowedObserverPubkeys != nil {
+		log.Printf("config: ingest observer filter active — %d allowed observer public keys", len(allowedObserverPubkeys))
+	} else {
+		log.Printf("config: ingest observer filter inactive — accepting all observer public keys")
 	}
 
-	broker1 := ingest.New(
-		ingest.Config{
-			BrokerName:          "mqtt1",
-			URL:                 mustEnv("MQTT_BROKER_1_URL"),
-			Username:            mustEnv("MQTT_BROKER_1_USERNAME"),
-			Password:            mustEnv("MQTT_BROKER_1_PASSWORD"),
-			TelemetryResolution: telemetryResolution,
-			AllowedIATAs:        allowedIATAs,
-		},
-		store,
-		h,
-		keys,
-		scopes,
-	)
-
-	broker2 := ingest.New(
-		ingest.Config{
-			BrokerName:          "mqtt2",
-			URL:                 mustEnv("MQTT_BROKER_2_URL"),
-			Username:            mustEnv("MQTT_BROKER_2_USERNAME"),
-			Password:            mustEnv("MQTT_BROKER_2_PASSWORD"),
-			TelemetryResolution: telemetryResolution,
-			AllowedIATAs:        allowedIATAs,
-		},
-		store,
-		h,
-		keys,
-		scopes,
-	)
-
+	workers := configuredBrokerWorkers(store, h, keys, scopes, telemetryResolution, allowedIATAs, allowedObserverPubkeys)
 	if cr, ok := reader.(*cache.CachedReader); ok {
-		broker1.SetCacheInvalidators(cr.InvalidateNode, cr.InvalidateObserver)
-		broker2.SetCacheInvalidators(cr.InvalidateNode, cr.InvalidateObserver)
+		for _, worker := range workers {
+			worker.SetCacheInvalidators(cr.InvalidateNode, cr.InvalidateObserver)
+		}
 	}
 
-	go broker1.Start(ctx)
-	go broker2.Start(ctx)
+	for _, worker := range workers {
+		go worker.Start(ctx)
+	}
 
 	// ── cleanup and materialized view refresh goroutine ─────────────────────────────────────────
 	go func() {
@@ -271,7 +251,7 @@ func main() {
 	}()
 
 	// ── HTTP server ──────────────────────────────────────────────────────────
-	r := router.New(h, reader, []*ingest.Worker{broker1, broker2}, maxConnsPerIP, cfg.CORS)
+	r := router.New(h, reader, workers, maxConnsPerIP, cfg.CORS)
 
 	srv := &http.Server{
 		Addr:    addr,
@@ -317,6 +297,96 @@ func mustEnv(key string) string {
 		log.Printf("warning: %s is not set", key)
 	}
 	return v
+}
+
+func configuredBrokerWorkers(
+	store ingest.DB,
+	h *hub.Hub,
+	keys ingest.ChannelKeyStore,
+	scopes ingest.ScopeStore,
+	telemetryResolution time.Duration,
+	allowedIATAs map[string]struct{},
+	allowedObserverPubkeys map[string]struct{},
+) []*ingest.Worker {
+	brokers := []struct {
+		name     string
+		url      string
+		username string
+		password string
+	}{
+		{
+			name:     "mqtt1",
+			url:      os.Getenv("MQTT_BROKER_1_URL"),
+			username: os.Getenv("MQTT_BROKER_1_USERNAME"),
+			password: os.Getenv("MQTT_BROKER_1_PASSWORD"),
+		},
+		{
+			name:     "mqtt2",
+			url:      os.Getenv("MQTT_BROKER_2_URL"),
+			username: os.Getenv("MQTT_BROKER_2_USERNAME"),
+			password: os.Getenv("MQTT_BROKER_2_PASSWORD"),
+		},
+	}
+
+	workers := make([]*ingest.Worker, 0, len(brokers))
+	for _, broker := range brokers {
+		if strings.TrimSpace(broker.url) == "" {
+			log.Printf("ingest[%s]: disabled, broker URL is not set", broker.name)
+			continue
+		}
+		workers = append(workers, ingest.New(
+			ingest.Config{
+				BrokerName:             broker.name,
+				URL:                    broker.url,
+				Username:               broker.username,
+				Password:               broker.password,
+				TelemetryResolution:    telemetryResolution,
+				AllowedIATAs:           allowedIATAs,
+				AllowedObserverPubkeys: allowedObserverPubkeys,
+			},
+			store,
+			h,
+			keys,
+			scopes,
+		))
+	}
+	return workers
+}
+
+func buildAllowedIATAs(ingestCfg config.IngestFilterConfig) map[string]struct{} {
+	allowed := iatadb.BuildAllowedSet(ingestCfg.AllowCountries, ingestCfg.AllowContinents)
+	if len(ingestCfg.AllowIATAs) == 0 {
+		return allowed
+	}
+	if allowed == nil {
+		allowed = make(map[string]struct{}, len(ingestCfg.AllowIATAs))
+	}
+	for _, iata := range ingestCfg.AllowIATAs {
+		iata = strings.ToUpper(strings.TrimSpace(iata))
+		if iata == "" {
+			continue
+		}
+		allowed[iata] = struct{}{}
+	}
+	return allowed
+}
+
+func buildAllowedObserverPubkeys(pubkeys []string) map[string]struct{} {
+	if len(pubkeys) == 0 {
+		return nil
+	}
+	allowed := make(map[string]struct{}, len(pubkeys))
+	for _, pubkey := range pubkeys {
+		pubkey = strings.ToUpper(strings.TrimSpace(pubkey))
+		if pubkey == "" {
+			continue
+		}
+		allowed[pubkey] = struct{}{}
+	}
+	if len(allowed) == 0 {
+		return nil
+	}
+	return allowed
 }
 
 func refreshMaterializedViews(ctx context.Context, store *db.Store) {

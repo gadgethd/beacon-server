@@ -59,6 +59,10 @@ type Config struct {
 	// Build this set at startup from IngestFilterConfig using iatadb.
 	AllowedIATAs map[string]struct{}
 
+	// AllowedObserverPubkeys is a pre-computed set of MQTT publisher public keys.
+	// If non-nil, packets/status from other publishers are dropped.
+	AllowedObserverPubkeys map[string]struct{}
+
 	// TelemetryResolution controls how frequently telemetry snapshots are stored.
 	// Status messages within the same window are deduplicated via ON CONFLICT.
 	// Defaults to 1 hour if zero.
@@ -269,8 +273,13 @@ func (w *Worker) handleMessage(msg mqtt.Message) {
 
 	// Drop packets from IATAs outside the configured geographic filter.
 	if w.cfg.AllowedIATAs != nil {
-		if _, ok := w.cfg.AllowedIATAs[iata]; !ok {
-			log.Printf("ingest[%s]: dropped packet from %s (not in allowed IATAs)", w.cfg.BrokerName, iata)
+		if _, ok := w.cfg.AllowedIATAs[strings.ToUpper(iata)]; !ok {
+			return
+		}
+	}
+
+	if w.cfg.AllowedObserverPubkeys != nil {
+		if _, ok := w.cfg.AllowedObserverPubkeys[strings.ToUpper(pubkeyHex)]; !ok {
 			return
 		}
 	}

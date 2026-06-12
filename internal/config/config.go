@@ -193,6 +193,14 @@ type IngestFilterConfig struct {
 	// AllowContinents is a list of continent codes to accept.
 	// Packets from observers in other continents are dropped at ingest.
 	AllowContinents []string `yaml:"allow_continents"`
+
+	// AllowIATAs is an explicit list of observer IATA codes to accept.
+	// Use this when deployment scope is smaller than a full country/continent.
+	AllowIATAs []string `yaml:"allow_iatas"`
+
+	// AllowObserverPubkeys is an explicit list of MQTT publisher public keys to
+	// accept. Keys are compared case-insensitively as hex strings.
+	AllowObserverPubkeys []string `yaml:"allow_observer_pubkeys"`
 }
 
 // Load reads and parses the config file at path.

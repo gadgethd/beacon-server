@@ -550,14 +550,7 @@ func (w *Worker) handlePacket(ctx context.Context, iata, pubkeyHex string, raw [
 		log.Printf("ingest[%s]: db: upsert packet failed from %s/%s: %v", w.cfg.BrokerName, iata, pubkeyHex, err)
 		return
 	}
-	// Try parsing with timezone offset first
-	heardAt, err := time.Parse("2006-01-02T15:04:05.000000-07:00", envelope.Timestamp)
-	if err != nil {
-		heardAt, err = time.Parse("2006-01-02T15:04:05.000000", envelope.Timestamp)
-	}
-	if err != nil {
-		heardAt, err = time.Parse("2006-01-02T15:04:05", envelope.Timestamp)
-	}
+	heardAt, err := parseEnvelopeTimestamp(envelope.Timestamp)
 	if err != nil {
 		log.Printf("ingest[%s]: failed to parse timestamp %q: %v", w.cfg.BrokerName, envelope.Timestamp, err)
 		heardAt = time.Now().UTC()
@@ -669,6 +662,25 @@ func (w *Worker) handlePacket(ctx context.Context, iata, pubkeyHex string, raw [
 		}
 		w.broadcast(hub.EventPacketObservation, iata, packet.PayloadType(), "", evt)
 	}
+}
+
+func parseEnvelopeTimestamp(value string) (time.Time, error) {
+	formats := []string{
+		time.RFC3339Nano,
+		"2006-01-02T15:04:05.000000-07:00",
+		"2006-01-02T15:04:05.000000",
+		"2006-01-02T15:04:05",
+	}
+
+	var err error
+	for _, format := range formats {
+		var parsed time.Time
+		parsed, err = time.Parse(format, value)
+		if err == nil {
+			return parsed, nil
+		}
+	}
+	return time.Time{}, err
 }
 
 // computeTransportCode derives transport_code_1 from a transport key and packet payload.

@@ -2906,6 +2906,19 @@ func (q *Queries) SetNodeDefaultScope(ctx context.Context, arg SetNodeDefaultSco
 	return err
 }
 
+const clearNodeLocation = `-- name: ClearNodeLocation :exec
+UPDATE nodes SET latitude = NULL, longitude = NULL, location_source = NULL
+WHERE id = $1
+`
+
+// Permanently null a node's stored coordinates. Called on every advert from a
+// node whose name carries the location-redaction marker, so the coordinates
+// never persist in the DB rather than only being masked on read.
+func (q *Queries) ClearNodeLocation(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, clearNodeLocation, id)
+	return err
+}
+
 const setNodeMultibytePaths = `-- name: SetNodeMultibytePaths :exec
 UPDATE nodes SET supports_multibyte_paths = TRUE
 WHERE id = $1 AND supports_multibyte_paths = FALSE

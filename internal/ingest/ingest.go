@@ -99,6 +99,11 @@ type DB interface {
 	// UpsertNode upserts a nodes row from an advert payload.
 	UpsertNode(ctx context.Context, n UpsertNodeParams, r RadioSettings) (uuid.UUID, error)
 
+	// ClearNodeLocation permanently nulls a node's stored coordinates. Called
+	// after upsert whenever the advertised name carries the location-redaction
+	// marker, so the coordinates never persist for an opted-out node.
+	ClearNodeLocation(ctx context.Context, nodeID uuid.UUID) error
+
 	// UpsertNodeIATA upserts a node_iatas row.
 	UpsertNodeIATA(ctx context.Context, nodeID uuid.UUID, iata string) error
 

@@ -40,6 +40,14 @@ func (s *Store) UpsertNode(ctx context.Context, n ingest.UpsertNodeParams, radio
 	return row.ID, nil
 }
 
+// ClearNodeLocation permanently nulls a node's stored coordinates and location
+// source. Called from the advert pipeline whenever an advertising node's name
+// carries the location-redaction marker, so a redacted node's coordinates are
+// removed from the DB outright instead of only being masked on read.
+func (s *Store) ClearNodeLocation(ctx context.Context, nodeID uuid.UUID) error {
+	return s.q.ClearNodeLocation(ctx, nodeID)
+}
+
 func (s *Store) UpsertNodeIATA(ctx context.Context, nodeID uuid.UUID, iata string) error {
 	params := sqlc.UpsertNodeIATAParams{NodeID: nodeID, Iata: iata}
 	return s.q.UpsertNodeIATA(ctx, params)

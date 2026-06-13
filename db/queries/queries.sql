@@ -457,6 +457,13 @@ ON CONFLICT (public_key) DO UPDATE SET
   radio_bw_khz    = EXCLUDED.radio_bw_khz
 RETURNING *;
 
+-- name: ClearNodeLocation :exec
+-- Permanently null a node's stored coordinates. Called on every advert from a
+-- node whose name carries the location-redaction marker, so the coordinates
+-- never persist in the DB rather than only being masked on read.
+UPDATE nodes SET latitude = NULL, longitude = NULL, location_source = NULL
+WHERE id = $1;
+
 -- name: SetNodeMultibytePaths :exec
 UPDATE nodes SET supports_multibyte_paths = TRUE
 WHERE id = $1 AND supports_multibyte_paths = FALSE;

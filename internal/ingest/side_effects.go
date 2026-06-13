@@ -95,6 +95,16 @@ func (w *Worker) handlePayloadTypeSideEffects(ctx context.Context, packet *meshc
 			log.Printf("ingest[%s]: db: upsert node failed: %v", w.cfg.BrokerName, err)
 			return
 		}
+		// If the node opts its location out via the redaction marker in its name,
+		// null the coordinates in the DB on every advert. The upsert above keeps
+		// (COALESCEs) any previously stored coordinates, so masking on read is not
+		// enough — clear them outright so an opted-out node never persists a
+		// location, even when a later advert re-supplies one.
+		if api.LocationRedacted(&params.Name) {
+			if err := w.db.ClearNodeLocation(ctx, nodeID); err != nil {
+				log.Printf("ingest[%s]: db: clear node location failed: %v", w.cfg.BrokerName, err)
+			}
+		}
 		// invalidate cache for this node
 		if w.onNodeUpsert != nil {
 			w.onNodeUpsert(ctx, nodeID)

@@ -104,6 +104,12 @@ type DB interface {
 	// marker, so the coordinates never persist for an opted-out node.
 	ClearNodeLocation(ctx context.Context, nodeID uuid.UUID) error
 
+	// GetNodeByPubkey returns the node ID for a given public key, or an
+	// error (sql.ErrNoRows-equivalent) if no node exists yet for that key.
+	// Used for observer-sourced neighbor writes (e.g. DISCOVER_RESP), where
+	// the observer's own node may not exist until it has advertised.
+	GetNodeByPubkey(ctx context.Context, pubkey []byte) (uuid.UUID, error)
+
 	// UpsertNodeIATA upserts a node_iatas row.
 	UpsertNodeIATA(ctx context.Context, nodeID uuid.UUID, iata string) error
 
@@ -162,7 +168,8 @@ type DB interface {
 
 	// UpsertNodeNeighbor records or updates a neighbor relationship between two nodes.
 	// nodeID is the advertising node, neighborID is the first-hop forwarder.
-	UpsertNodeNeighbor(ctx context.Context, nodeID, neighborID uuid.UUID, iata string) error
+	// snr is optional (nil when no signal reading is available, the common case).
+	UpsertNodeNeighbor(ctx context.Context, nodeID, neighborID uuid.UUID, iata string, snr *float32) error
 }
 
 // ChannelKeyStore is a read-only view of the channel keys loaded from config.
@@ -304,6 +311,34 @@ func (w *Worker) broadcast(eventType hub.EventType, iata string, payloadType uin
 		IATA:        iata,
 		PayloadType: payloadType,
 		ChannelHash: channelHash,
+	})
+}
+
+// broadcastPacketObservation marshals evt twice: once as-is (the default
+// payload every packetObservation subscriber gets) and once with
+// resolvedPath populated (delivered only to connections that opted in via
+// the "configure" WS message; see hub.Client.ResolvePath). resolvedPath is
+// passed in rather than computed here because the caller already has the
+// path-hash resolution results in hand from other per-packet work (known
+// route detection, capability detection) — this adds no extra DB calls.
+func (w *Worker) broadcastPacketObservation(iata string, payloadType uint8, evt packetObservationEvent, resolvedPath []api.ResolvedHop) {
+	base, err := json.Marshal(evt)
+	if err != nil {
+		log.Printf("ingest[%s]: failed to marshal packetObservation event: %v", w.cfg.BrokerName, err)
+		return
+	}
+	evt.Observation.ResolvedPath = resolvedPath
+	resolved, err := json.Marshal(evt)
+	if err != nil {
+		log.Printf("ingest[%s]: failed to marshal packetObservation event (resolved variant): %v", w.cfg.BrokerName, err)
+		resolved = nil // fall back to base-only; not fatal
+	}
+	w.hub.Broadcast(hub.Event{
+		Type:            hub.EventPacketObservation,
+		Payload:         base,
+		PayloadResolved: resolved,
+		IATA:            iata,
+		PayloadType:     payloadType,
 	})
 }
 

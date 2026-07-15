@@ -34,9 +34,15 @@ const (
 
 // Event is a single fan-out unit. Payload is pre-serialised JSON so the
 // broadcast loop never touches encoding — it's done once by the ingest path.
+//
+// PayloadResolved is an optional second serialization carrying additional
+// fields for clients that opted into them via configure (currently just
+// resolvedPath on packetObservation events). Left nil for event types that
+// don't have an opt-in variant; the hub falls back to Payload in that case.
 type Event struct {
-	Type    EventType
-	Payload json.RawMessage
+	Type            EventType
+	Payload         json.RawMessage
+	PayloadResolved json.RawMessage
 
 	// Routing metadata used by the hub to match subscriptions.
 	// Populated by the ingest layer before calling Broadcast.
@@ -64,6 +70,13 @@ type Client struct {
 	Send          chan Event
 	laggedCH      chan LaggedNotification
 	subscriptions map[string]Scope // OR semantics: event matches if it matches any scope entry
+
+	// ResolvePath is a connection-wide opt-in (not per-subscription), set via
+	// SetResolvePath ("configure" WS messages). Freely toggleable at any
+	// point during the connection's lifetime. Only ever read/written inside
+	// Run(), so it needs no locking despite Client being shared with the WS
+	// goroutines.
+	ResolvePath bool
 }
 
 // matches returns true if the event satisfies at least one of the client's
@@ -96,7 +109,7 @@ func scopeMatches(s Scope, e Event) bool {
 	if len(s.PayloadTypes) > 0 && !slices.Contains(s.PayloadTypes, e.PayloadType) {
 		return false
 	}
-	if len(s.ChannelHashes) > 0 && !slices.Contains(s.ChannelHashes, e.ChannelHash) {
+	if e.Type == EventChannelMessage && len(s.ChannelHashes) > 0 && !slices.Contains(s.ChannelHashes, e.ChannelHash) {
 		return false
 	}
 	return true
@@ -110,15 +123,35 @@ type Hub struct {
 	broadcast   chan Event
 }
 
+// subscribeMsg carries a client registration, a scope subscription, or a
+// configure (resolvePath toggle) request — all three go through this single
+// channel, not separate ones, specifically so that Go's same-channel FIFO
+// guarantee orders them relative to NewClient's registration message. A
+// separate "configure" channel raced against registration: select() has no
+// cross-channel ordering guarantee, so a configure sent immediately after
+// NewClient could be (and empirically was, ~50% of the time) processed by
+// Run() before the registration message, silently no-oping since the client
+// wasn't in the clients map yet.
 type subscribeMsg struct {
 	client         *Client
 	scope          Scope
 	subscriptionID string
+
+	isConfigure bool
+	resolvePath bool
 }
 
 type unsubscribeMsg struct {
 	client         *Client
 	subscriptionID string
+}
+
+// configureMsg carries a connection-wide setting change, decoupled from the
+// subscribe/unsubscribe scope mechanics so it can be toggled independently
+// and repeatedly over the life of a connection.
+type configureMsg struct {
+	client      *Client
+	resolvePath bool
 }
 
 // New creates a Hub. Call Run() in a goroutine before using it.
@@ -158,6 +191,15 @@ func (h *Hub) RemoveScope(c *Client, id string) {
 	h.unsubscribe <- unsubscribeMsg{client: c, subscriptionID: id}
 }
 
+// SetResolvePath toggles a client's opt-in to the resolvedPath variant of
+// packetObservation events. Unlike scopes, this is a single connection-wide
+// flag (not additive/OR'd) and can be flipped on or off at any point during
+// the connection's lifetime — takes effect on the next broadcast after the
+// hub processes it.
+func (h *Hub) SetResolvePath(c *Client, enabled bool) {
+	h.subscribe <- subscribeMsg{client: c, isConfigure: true, resolvePath: enabled}
+}
+
 // Remove deregisters a client and closes its Send channel.
 // Safe to call from any goroutine (e.g. the WS handler's defer).
 func (h *Hub) Remove(c *Client) {
@@ -188,10 +230,16 @@ func (h *Hub) Run() {
 		select {
 
 		case msg := <-h.subscribe:
-			if msg.subscriptionID == "" {
+			switch {
+			case msg.subscriptionID == "" && !msg.isConfigure:
 				// Registration with no scope yet (NewClient path).
 				clients[msg.client] = struct{}{}
-			} else {
+			case msg.isConfigure:
+				// SetResolvePath path — client must already be registered.
+				if _, ok := clients[msg.client]; ok {
+					msg.client.ResolvePath = msg.resolvePath
+				}
+			default:
 				// AddScope path — client must already be registered.
 				if _, ok := clients[msg.client]; ok {
 					msg.client.subscriptions[msg.subscriptionID] = msg.scope
@@ -215,8 +263,12 @@ func (h *Hub) Run() {
 				if !c.matches(evt) {
 					continue
 				}
+				outEvt := evt
+				if c.ResolvePath && evt.PayloadResolved != nil {
+					outEvt.Payload = evt.PayloadResolved
+				}
 				select {
-				case c.Send <- evt:
+				case c.Send <- outEvt:
 				default:
 					dropped := 1
 					select {

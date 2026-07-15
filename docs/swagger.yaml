@@ -212,6 +212,11 @@ definitions:
         type: string
       name:
         type: string
+      neighborIds:
+        description: only populated when the list request opts in; see ?neighbors=true
+        items:
+          type: string
+        type: array
       neighbors:
         items:
           $ref: '#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.NodeNeighbor'
@@ -271,6 +276,8 @@ definitions:
         type: integer
       publicKey:
         type: string
+      snr:
+        type: number
     type: object
   github_com_MeshCore-Beacon_beacon-server_internal_api.NodeSummary:
     properties:
@@ -297,6 +304,11 @@ definitions:
         type: number
       name:
         type: string
+      neighborIds:
+        description: only populated when the list request opts in; see ?neighbors=true
+        items:
+          type: string
+        type: array
       nodeType:
         description: 1=companion, 2=repeater, 3=room_server, 4=sensor
         type: integer
@@ -1010,7 +1022,7 @@ info:
     name: AGPL-3-or-later
   termsOfService: https://github.com/MeshCore-Beacon/beacon-server
   title: MeshCore Beacon API
-  version: 1.4.1
+  version: 1.5.4
 paths:
   /brokers:
     get:
@@ -1336,6 +1348,11 @@ paths:
       - description: Filter by multibyte trace support (true/false); omit for no filter
         in: query
         name: supportsMultibyteTraces
+        type: boolean
+      - description: Include each node's known neighbor IDs (neighborIds field). Bare
+          ?neighbors or ?neighbors=true enables it; omit/false for none
+        in: query
+        name: neighbors
         type: boolean
       - description: last_seen epoch ms of last item for pagination
         in: query

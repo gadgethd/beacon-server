@@ -61,11 +61,12 @@ func (s *Store) UpsertNodeShortID(ctx context.Context, nodeID uuid.UUID, iata st
 	})
 }
 
-func (s *Store) UpsertNodeNeighbor(ctx context.Context, nodeID, neighborID uuid.UUID, iata string) error {
+func (s *Store) UpsertNodeNeighbor(ctx context.Context, nodeID, neighborID uuid.UUID, iata string, snr *float32) error {
 	return s.q.UpsertNodeNeighbor(ctx, sqlc.UpsertNodeNeighborParams{
 		NodeID:     nodeID,
 		NeighborID: neighborID,
 		Iata:       iata,
+		Snr:        snr,
 	})
 }
 
@@ -87,22 +88,23 @@ func (s *Store) SetNodeDefaultScope(ctx context.Context, nodeID uuid.UUID, scope
 	})
 }
 
-func (s *Store) ListNodes(ctx context.Context, nodeType int16, iatas []string, supportsMultibytePaths, supportsMultibyteTraces *bool, pubkey []byte, name, scope string, cursor int64, limit int32) (api.Page[api.NodeSummary], error) {
+func (s *Store) ListNodes(ctx context.Context, nodeType int16, iatas []string, supportsMultibytePaths, supportsMultibyteTraces *bool, pubkey []byte, name, scope string, cursor int64, limit int32, includeNeighbors bool) (api.Page[api.NodeSummary], error) {
 	var cursorTS pgtype.Timestamptz
 	if cursor > 0 {
 		cursorTS = pgtype.Timestamptz{Time: time.UnixMilli(cursor), Valid: true}
 	}
 	iataFilter := strings.Join(iatas, ",")
 	rows, err := s.q.ListNodes(ctx, sqlc.ListNodesParams{
-		Column1: nodeType,
-		Column2: iataFilter,
-		Column3: tristate(supportsMultibytePaths),
-		Column4: tristate(supportsMultibyteTraces),
-		Column5: pubkey,
-		Column6: name,
-		Column7: cursorTS,
-		Limit:   limit + 1,
-		Column9: scope,
+		Column1:  nodeType,
+		Column2:  iataFilter,
+		Column3:  tristate(supportsMultibytePaths),
+		Column4:  tristate(supportsMultibyteTraces),
+		Column5:  pubkey,
+		Column6:  name,
+		Column7:  cursorTS,
+		Limit:    limit + 1,
+		Column9:  scope,
+		Column10: includeNeighbors,
 	})
 	if err != nil {
 		return api.Page[api.NodeSummary]{}, err
@@ -124,6 +126,7 @@ func (s *Store) ListNodes(ctx context.Context, nodeType int16, iatas []string, s
 			IsObserver:         v.IsObserver,
 			ObserverID:         nullableUUID(v.ObserverID),
 			KnownNeighborCount: v.KnownNeighborCount,
+			NeighborIDs:        v.NeighborIds,
 		}
 		if len(v.Iatas) > 0 {
 			if err := json.Unmarshal(v.Iatas, &node.IATAs); err != nil {
@@ -223,6 +226,10 @@ func (s *Store) GetNodesByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UU
 	return result, nil
 }
 
+func (s *Store) GetNodeByPubkey(ctx context.Context, pubkey []byte) (uuid.UUID, error) {
+	return s.q.GetNodeByPubkey(ctx, pubkey)
+}
+
 func (s *Store) GetNodeNeighbors(ctx context.Context, nodeID uuid.UUID) ([]api.NodeNeighbor, error) {
 	rows, err := s.q.GetNodeNeighbors(ctx, nodeID)
 	if err != nil {
@@ -236,6 +243,7 @@ func (s *Store) GetNodeNeighbors(ctx context.Context, nodeID uuid.UUID) ([]api.N
 			if r.LastSeen.Time.After(time.UnixMilli(items[idx].LastSeen)) {
 				items[idx].LastSeen = r.LastSeen.Time.UnixMilli()
 				items[idx].IATA = r.Iata
+				items[idx].SNR = r.Snr
 			}
 			if r.FirstSeen.Time.Before(time.UnixMilli(items[idx].FirstSeen)) {
 				items[idx].FirstSeen = r.FirstSeen.Time.UnixMilli()
@@ -256,6 +264,7 @@ func (s *Store) GetNodeNeighbors(ctx context.Context, nodeID uuid.UUID) ([]api.N
 			ObservationCount: r.ObservationCount,
 			FirstSeen:        r.FirstSeen.Time.UnixMilli(),
 			LastSeen:         r.LastSeen.Time.UnixMilli(),
+			SNR:              r.Snr,
 		})
 	}
 	return items, nil

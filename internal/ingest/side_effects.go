@@ -65,11 +65,15 @@ type nodeUpdateEvent struct {
 // new observation is confirmed inserted. Currently handles:
 //   - PayloadTypeAdvert (0x04): upsert node and node_iatas
 //   - PayloadTypeGrpTxt (0x05): decrypt and store channel message if key is known
-func (w *Worker) handlePayloadTypeSideEffects(ctx context.Context, packet *meshcore.Packet, iata string, packetHash []byte, radio RadioSettings, scopeID *int32, matchedScope *string) {
+func (w *Worker) handlePayloadTypeSideEffects(ctx context.Context, packet *meshcore.Packet, iata string, packetHash []byte, radio RadioSettings, scopeID *int32, matchedScope *string, observerPubkey []byte, rxSNR float32) {
 	if packet.PayloadType() == meshcore.PayloadTypeAdvert {
 		advert, err := meshcore.AdvertFromBytes(packet.Payload)
 		if err != nil {
 			log.Printf("ingest[%s]: error decoding advert payload: %v", w.cfg.BrokerName, err)
+			return
+		}
+		if !advert.Verify() {
+			log.Printf("ingest[%s]: dropped advert with invalid signature from pubkey %s", w.cfg.BrokerName, hex.EncodeToString(advert.PublicKey.PublicKeyBytes()))
 			return
 		}
 		var lat, lon *float64
@@ -109,6 +113,7 @@ func (w *Worker) handlePayloadTypeSideEffects(ctx context.Context, packet *meshc
 		if w.onNodeUpsert != nil {
 			w.onNodeUpsert(ctx, nodeID)
 		}
+		// record advertiser neighbors
 		// if the advert was forwarded, the first hop is a neighbor
 		if packet.PathHashCount() > 0 && (advert.Type() == meshcore.AdvertTypeRepeater || advert.Type() == meshcore.AdvertTypeRoom) {
 			firstHop := packet.PathHashes()
@@ -117,10 +122,23 @@ func (w *Worker) handlePayloadTypeSideEffects(ctx context.Context, packet *meshc
 				if err == nil {
 					key := hex.EncodeToString(firstHop[0])
 					if entries := resolved[key]; len(entries) == 1 {
-						if err := w.db.UpsertNodeNeighbor(ctx, nodeID, entries[0].NodeID, iata); err != nil {
+						if err := w.db.UpsertNodeNeighbor(ctx, nodeID, entries[0].NodeID, iata, nil); err != nil {
 							log.Printf("ingest[%s]: failed to upsert node neighbor: %v", w.cfg.BrokerName, err)
 						}
 					}
+				}
+			}
+		}
+		// record observer neighbors
+		// if heard directly (zero-hop), record the observer's own RX SNR
+		// of hearing this advertiser as a node_neighbors edge. Skipped if
+		// the observer has no node row yet (hasn't advertised itself).
+		if packet.PathHashCount() == 0 && (advert.Type() == meshcore.AdvertTypeRepeater || advert.Type() == meshcore.AdvertTypeRoom) {
+			observerNodeID, oErr := w.db.GetNodeByPubkey(ctx, observerPubkey)
+			if oErr == nil && observerNodeID != nodeID {
+				snr := rxSNR
+				if err := w.db.UpsertNodeNeighbor(ctx, observerNodeID, nodeID, iata, &snr); err != nil {
+					log.Printf("ingest[%s]: failed to upsert observer-advert neighbor: %v", w.cfg.BrokerName, err)
 				}
 			}
 		}
@@ -177,13 +195,13 @@ func (w *Worker) handlePayloadTypeSideEffects(ctx context.Context, packet *meshc
 		}
 		channelHashBytes := []byte{grpTxt.ChannelHash}
 
-		// Always upsert a hash-only row so unknown channels are recorded.
-		_, _ = w.db.UpsertChannelHashOnly(ctx, channelHashBytes)
-
 		// Try each known key entry for this hash.
 		entries := w.keys.GetKey(channelHashBytes)
 		if len(entries) == 0 {
-			return // channel key unknown; message stored as encrypted blob only
+			// channel key unknown; record a hash-only row and store the
+			// message as an encrypted blob only.
+			_, _ = w.db.UpsertChannelHashOnly(ctx, channelHashBytes)
+			return
 		}
 		var payload *meshcore.GroupTextPayload
 		var usedEntry keystore.Entry
@@ -195,7 +213,10 @@ func (w *Worker) handlePayloadTypeSideEffects(ctx context.Context, packet *meshc
 			}
 		}
 		if payload == nil {
-			return // none of the keys worked
+			// none of the known keys worked for this hash; record a
+			// hash-only row so the channel is still visible.
+			_, _ = w.db.UpsertChannelHashOnly(ctx, channelHashBytes)
+			return
 		}
 
 		// Upsert the keyed channel row — messages are associated with this row.

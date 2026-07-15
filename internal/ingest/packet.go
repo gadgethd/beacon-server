@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/MeshCore-Beacon/beacon-server/internal/api"
-	"github.com/MeshCore-Beacon/beacon-server/internal/hub"
 	"github.com/google/uuid"
 	"github.com/meshcore-go/meshcore-go"
 )
@@ -93,10 +92,15 @@ type packetObservationEvent struct {
 			HashSize uint8  `json:"hashSize"`
 			HopCount uint8  `json:"hopCount"`
 		} `json:"pathLength"`
-		PropagationTimeMs int32 `json:"propagationTimeMs"`
+		PropagationTimeMs int32             `json:"propagationTimeMs"`
+		ResolvedPath      []api.ResolvedHop `json:"resolvedPath"` // only present in the resolvePath-opted-in variant; see hub.Event.PayloadResolved
 	} `json:"observation"`
 }
 
+// parsedAnonReq is the parsed form of an ANON_REQ payload. Per
+// coreprotocol.org §2.10: the sender includes its full public key inline
+// (not yet a known contact of the destination) so the destination can
+// derive a shared secret; EphemeralPubKey here is that inline sender key.
 type parsedAnonReq struct {
 	Raw             string `json:"raw"`
 	Type            string `json:"type"`
@@ -104,6 +108,10 @@ type parsedAnonReq struct {
 	EphemeralPubKey string `json:"ephemeralPubKey"` // hex
 }
 
+// advertFlags is the decoded form of an advert's app_data flags byte. Per
+// coreprotocol.org §2.8.3: DeviceRole occupies the low 4 bits (ADV_TYPE_*),
+// and the presence bits occupy the high 4 bits, gating which optional
+// fields (location, name, feature1/2) follow in app_data.
 type advertFlags struct {
 	Raw            string `json:"raw"`
 	DeviceRole     int    `json:"deviceRole"`
@@ -114,6 +122,10 @@ type advertFlags struct {
 	HasFeature2    bool   `json:"hasFeature2"`
 }
 
+// advertAppData is the parsed form of an ADVERT payload's app_data section.
+// Per coreprotocol.org §2.8.2: fields are present in this fixed order, each
+// only if its corresponding flag bit is set; Name, if present, fills the
+// remainder of app_data with no null terminator on the wire.
 type advertAppData struct {
 	Raw       string      `json:"raw"`
 	Flags     advertFlags `json:"flags"`
@@ -124,6 +136,8 @@ type advertAppData struct {
 	Name      *string     `json:"name"`
 }
 
+// parsedAdvert is the parsed form of an ADVERT payload (§2.8). Unencrypted
+// but signed; Signature covers public_key || timestamp || app_data.
 type parsedAdvert struct {
 	Type      string        `json:"type"`
 	Raw       string        `json:"raw"`
@@ -133,6 +147,10 @@ type parsedAdvert struct {
 	AppData   advertAppData `json:"appData"`
 }
 
+// parsedEnvelope is the parsed form of the shared direct-encrypted wrapper
+// used by REQ/RESPONSE/TXT_MSG/PATH payloads (§2.9). Decrypted holds the
+// payload-type-specific plaintext once MAC verification and decryption
+// succeed, or nil if the observer doesn't hold the relevant key.
 type parsedEnvelope struct {
 	Raw              string `json:"raw"`
 	Type             string `json:"type"`
@@ -144,6 +162,10 @@ type parsedEnvelope struct {
 	Decrypted        any    `json:"decrypted"`
 }
 
+// parsedGroupEnvelope is the parsed form of the shared group-channel
+// wrapper used by GRP_TXT/GRP_DATA payloads (§2.11). Decrypted holds the
+// payload-type-specific plaintext once MAC verification and decryption
+// succeed against a known channel key, or nil otherwise.
 type parsedGroupEnvelope struct {
 	Raw              string `json:"raw"`
 	Type             string `json:"type"`
@@ -154,6 +176,10 @@ type parsedGroupEnvelope struct {
 	Decrypted        any    `json:"decrypted"`
 }
 
+// parsedTrace is the parsed form of a TRACE payload (§2.13). PathHashes is
+// the original hop-hash sequence carried in the payload trailer; SNRValues
+// is the accumulated per-hop SNR sequence carried in the packet header's
+// path field (a protocol-level repurposing distinct from the payload).
 type parsedTrace struct {
 	Raw        string    `json:"raw"`
 	Type       string    `json:"type"`
@@ -164,12 +190,20 @@ type parsedTrace struct {
 	SNRValues  []float32 `json:"snrValues"`
 }
 
+// parsedAck is the parsed form of an ACK payload (§2.12). Checksum is the
+// first 4 bytes of a SHA-256 digest (not a CRC, despite the firmware's
+// naming) used as a short identifier of the specific message being
+// acknowledged.
 type parsedAck struct {
 	Raw      string `json:"raw"`
 	Type     string `json:"type"`
 	Checksum string `json:"checksum"`
 }
 
+// parsedMultipart is the parsed form of a MULTIPART payload (§2.14),
+// currently used only for multi-ACK bursts. Remaining is the number of
+// additional bursts expected; WrappedType/WrappedPayload are the
+// encapsulated sub-payload (e.g. an ACK).
 type parsedMultipart struct {
 	Raw            string `json:"raw"`
 	Type           string `json:"type"`
@@ -178,6 +212,39 @@ type parsedMultipart struct {
 	WrappedPayload string `json:"wrappedPayload"`
 }
 
+// parsedDiscoverReq is the parsed form of a CONTROL/DISCOVER_REQ payload.
+// Per coreprotocol.org §2.15.1: type_filter is a bitfield where bit n means
+// "wants responses from ADV_TYPE_n", and since is an optional last-advert
+// cutoff. Repeaters rarely originate these, so the contained SNR-adjacent
+// data is mostly useful for UI display rather than analysis.
+type parsedDiscoverReq struct {
+	Raw        string `json:"raw"`
+	Type       string `json:"type"`
+	PrefixOnly bool   `json:"prefixOnly"`
+	TypeFilter byte   `json:"typeFilter"`
+	Tag        string `json:"tag"` // hex-encoded uint32, matches traceTag/checksum style elsewhere
+	Since      *int64 `json:"since,omitempty"`
+}
+
+// parsedDiscoverResp is the parsed form of a CONTROL/DISCOVER_RESP payload.
+// Per coreprotocol.org §2.15.2: flags low nibble is the responder's
+// ADV_TYPE_*, snr is the responder's reading of the *request* packet (a
+// node-to-node measurement, not the observer's reception quality — see
+// PubKeyPrefixOnly below for why we don't always have a resolvable node).
+type parsedDiscoverResp struct {
+	Raw              string  `json:"raw"`
+	Type             string  `json:"type"`
+	NodeType         byte    `json:"nodeType"`
+	NodeTypeName     string  `json:"nodeTypeName"`
+	RequestSNR       float32 `json:"requestSnr"` // responder's measurement of the request packet; node-to-node, not observer reception
+	Tag              string  `json:"tag"`
+	PubKey           string  `json:"pubKey"`           // hex; full 32 bytes or 8-byte prefix
+	PubKeyPrefixOnly bool    `json:"pubKeyPrefixOnly"` // true when PubKey is only an 8-byte prefix (not enough to resolve a node)
+}
+
+// parsedControl is the generic fallback shape for any CONTROL sub-type
+// (§2.15) not given its own typed parser above (currently everything
+// except DISCOVER_REQ/DISCOVER_RESP).
 type parsedControl struct {
 	Raw   string `json:"raw"`
 	Type  string `json:"type"`
@@ -185,6 +252,9 @@ type parsedControl struct {
 	Data  string `json:"data"`
 }
 
+// parsedRaw is the fallback shape for any payload type with no dedicated
+// parser, including PAYLOAD_TYPE_RAW_CUSTOM (§2.16), which is opaque to
+// the network layer by design.
 type parsedRaw struct {
 	Type string `json:"type"`
 	Raw  string `json:"raw"`
@@ -299,7 +369,7 @@ func (w *Worker) handlePacket(ctx context.Context, iata, pubkeyHex string, raw [
 
 	case meshcore.PayloadTypeAdvert:
 		advert, err := meshcore.AdvertFromBytes(packet.Payload)
-		if err == nil {
+		if err == nil && advert.Verify() {
 			originPubkey = advert.PublicKey.PublicKeyBytes()
 			appData := advert.AppData()
 			flags := advert.Flags()
@@ -439,8 +509,11 @@ func (w *Worker) handlePacket(ctx context.Context, iata, pubkeyHex string, raw [
 			traceTag = uint32ToBytes(trace.Tag)
 			hashSize := int(trace.PathHashSize())
 			hashes := make([]string, 0)
+			rawHashes := make([][]byte, 0)
 			for i := 0; i+hashSize <= len(trace.PathHashes); i += hashSize {
-				hashes = append(hashes, hex.EncodeToString(trace.PathHashes[i:i+hashSize]))
+				h := trace.PathHashes[i : i+hashSize]
+				hashes = append(hashes, hex.EncodeToString(h))
+				rawHashes = append(rawHashes, h)
 			}
 			// SNR values are in packet.Path, one signed int8 per consumed hop
 			snrValues := make([]float32, 0, len(packet.Path))
@@ -461,6 +534,31 @@ func (w *Worker) handlePacket(ctx context.Context, iata, pubkeyHex string, raw [
 				SNRValues:  snrValues,
 			}
 			parsedPayload, _ = json.Marshal(pt)
+
+			// Each consecutive hop pair becomes a node_neighbors edge:
+			// hop[i]'s measured SNR of receiving from hop[i-1]. hop[0]'s
+			// SNR (snrValues[0]) has no resolvable "previous" node (the
+			// originator isn't in PathHashes) and is skipped. Either side
+			// resolving ambiguously (>1 candidate) or not at all (0
+			// candidates) skips that specific pair.
+			if len(rawHashes) >= 2 {
+				resolved, rErr := w.db.ResolvePathHashes(ctx, iata, rawHashes)
+				if rErr == nil {
+					for i := 1; i < len(rawHashes); i++ {
+						if i >= len(snrValues) {
+							break
+						}
+						prevEntries := resolved[hashes[i-1]]
+						currEntries := resolved[hashes[i]]
+						if len(prevEntries) == 1 && len(currEntries) == 1 {
+							snr := snrValues[i]
+							if err := w.db.UpsertNodeNeighbor(ctx, currEntries[0].NodeID, prevEntries[0].NodeID, iata, &snr); err != nil {
+								log.Printf("ingest[%s]: failed to upsert trace neighbor: %v", w.cfg.BrokerName, err)
+							}
+						}
+					}
+				}
+			}
 		}
 
 	case meshcore.PayloadTypeAck:
@@ -469,7 +567,7 @@ func (w *Worker) handlePacket(ctx context.Context, iata, pubkeyHex string, raw [
 			pa := parsedAck{
 				Raw:      hex.EncodeToString(packet.Payload),
 				Type:     "ACK",
-				Checksum: hex.EncodeToString(uint32ToBytes(ack.AckCRC)),
+				Checksum: hex.EncodeToString(uint32ToBytes(ack.CRC())),
 			}
 			parsedPayload, _ = json.Marshal(pa)
 		}
@@ -490,13 +588,65 @@ func (w *Worker) handlePacket(ctx context.Context, iata, pubkeyHex string, raw [
 	case meshcore.PayloadTypeControl:
 		ctrl, err := meshcore.ControlFromBytes(packet.Payload)
 		if err == nil {
-			pc := parsedControl{
-				Raw:   hex.EncodeToString(packet.Payload),
-				Type:  "CONTROL",
-				Flags: ctrl.Flags,
-				Data:  hex.EncodeToString(ctrl.Data),
+			switch ctrl.SubType() {
+			case meshcore.ControlSubTypeDiscoverReq:
+				req, err := ctrl.DiscoverRequest()
+				if err == nil {
+					pd := parsedDiscoverReq{
+						Raw:        hex.EncodeToString(packet.Payload),
+						Type:       "DISCOVER_REQ",
+						PrefixOnly: req.PrefixOnly,
+						TypeFilter: req.TypeFilter,
+						Tag:        hex.EncodeToString(uint32ToBytes(req.Tag)),
+					}
+					if req.Since != 0 {
+						since := int64(req.Since)
+						pd.Since = &since
+					}
+					parsedPayload, _ = json.Marshal(pd)
+				}
+			case meshcore.ControlSubTypeDiscoverResp:
+				resp, err := ctrl.DiscoverResponse()
+				if err == nil {
+					pd := parsedDiscoverResp{
+						Raw:              hex.EncodeToString(packet.Payload),
+						Type:             "DISCOVER_RESP",
+						NodeType:         resp.NodeType,
+						NodeTypeName:     api.NodeTypeName(int16(resp.NodeType)),
+						RequestSNR:       resp.SNR,
+						Tag:              hex.EncodeToString(uint32ToBytes(resp.Tag)),
+						PubKey:           hex.EncodeToString(resp.PubKey),
+						PubKeyPrefixOnly: len(resp.PubKey) < 32,
+					}
+					parsedPayload, _ = json.Marshal(pd)
+
+					// Record the observer's own RX SNR of hearing this
+					// DISCOVER_RESP as a node_neighbors edge: observer's
+					// node -> responder's node. Skipped (not an error) if
+					// either the observer or the responder has no node row
+					// yet (e.g. neither has advertised), or if the pubkey
+					// is only an 8-byte prefix (not enough to resolve).
+					if len(resp.PubKey) == 32 {
+						observerNodeID, oErr := w.db.GetNodeByPubkey(ctx, pubkeyBytes)
+						responderNodeID, rErr := w.db.GetNodeByPubkey(ctx, resp.PubKey)
+						// don't insert our own node as a neighbor
+						if oErr == nil && rErr == nil && observerNodeID != responderNodeID {
+							rxSNR := float32(parseNumber(envelope.SNR))
+							if err := w.db.UpsertNodeNeighbor(ctx, observerNodeID, responderNodeID, iata, &rxSNR); err != nil {
+								log.Printf("ingest[%s]: failed to upsert observer-discover neighbor: %v", w.cfg.BrokerName, err)
+							}
+						}
+					}
+				}
+			default:
+				pc := parsedControl{
+					Raw:   hex.EncodeToString(packet.Payload),
+					Type:  "CONTROL",
+					Flags: ctrl.Flags,
+					Data:  hex.EncodeToString(ctrl.Data),
+				}
+				parsedPayload, _ = json.Marshal(pc)
 			}
-			parsedPayload, _ = json.Marshal(pc)
 		}
 
 	default:
@@ -556,7 +706,13 @@ func (w *Worker) handlePacket(ctx context.Context, iata, pubkeyHex string, raw [
 		heardAt, err = time.Parse("2006-01-02T15:04:05.000000", envelope.Timestamp)
 	}
 	if err != nil {
+		heardAt, err = time.Parse("2006-01-02T15:04:05.000000Z", envelope.Timestamp)
+	}
+	if err != nil {
 		heardAt, err = time.Parse("2006-01-02T15:04:05", envelope.Timestamp)
+	}
+	if err != nil {
+		heardAt, err = time.Parse("2006-01-02T15:04:05Z", envelope.Timestamp)
 	}
 	if err != nil {
 		log.Printf("ingest[%s]: failed to parse timestamp %q: %v", w.cfg.BrokerName, envelope.Timestamp, err)
@@ -638,7 +794,7 @@ func (w *Worker) handlePacket(ctx context.Context, iata, pubkeyHex string, raw [
 	}
 	w.runCapabilityDetection(ctx, packet.PayloadType(), packet.PathHashSize(), resolvedIDs)
 	if inserted {
-		w.handlePayloadTypeSideEffects(ctx, packet, iata, packetHash[:], radio, scopeID, matchedScope)
+		w.handlePayloadTypeSideEffects(ctx, packet, iata, packetHash[:], radio, scopeID, matchedScope, pubkeyBytes, float32(parseNumber(envelope.SNR)))
 		evt := packetObservationEvent{}
 		evt.PacketHash = hex.EncodeToString(packetHash[:])
 		evt.Packet.PayloadType = packet.PayloadType()
@@ -667,7 +823,8 @@ func (w *Worker) handlePacket(ctx context.Context, iata, pubkeyHex string, raw [
 		if matchedScope != nil {
 			evt.Packet.Scope = matchedScope
 		}
-		w.broadcast(hub.EventPacketObservation, iata, packet.PayloadType(), "", evt)
+		resolvedPath := api.BuildResolvedPath(hashes, resolved)
+		w.broadcastPacketObservation(iata, packet.PayloadType(), evt, resolvedPath)
 	}
 }
 

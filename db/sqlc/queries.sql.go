@@ -12,6 +12,19 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const clearNodeLocation = `-- name: ClearNodeLocation :exec
+UPDATE nodes SET latitude = NULL, longitude = NULL, location_source = NULL
+WHERE id = $1
+`
+
+// Permanently null a node's stored coordinates. Called on every advert from a
+// node whose name carries the location-redaction marker, so the coordinates
+// never persist in the DB rather than only being masked on read.
+func (q *Queries) ClearNodeLocation(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, clearNodeLocation, id)
+	return err
+}
+
 const deleteOldPackets = `-- name: DeleteOldPackets :exec
 DELETE FROM packets WHERE last_heard_at < $1
 `
@@ -59,7 +72,7 @@ func (q *Queries) GetChannelByID(ctx context.Context, id int32) (Channel, error)
 const getCrossIATANeighbors = `-- name: GetCrossIATANeighbors :many
 SELECT
     n.id, n.name, n.node_type, n.latitude, n.longitude,
-    nn.iata AS neighbor_iata, nn.observation_count, nn.last_seen
+    nn.iata AS neighbor_iata, nn.observation_count, nn.last_seen, nn.snr
 FROM node_neighbors nn
 JOIN nodes n ON n.id = nn.neighbor_id
 WHERE nn.node_id = $1
@@ -81,6 +94,7 @@ type GetCrossIATANeighborsRow struct {
 	NeighborIata     string             `json:"neighbor_iata"`
 	ObservationCount int64              `json:"observation_count"`
 	LastSeen         pgtype.Timestamptz `json:"last_seen"`
+	Snr              *float32           `json:"snr"`
 }
 
 // Returns neighbors of a node that are in a different IATA.
@@ -102,6 +116,7 @@ func (q *Queries) GetCrossIATANeighbors(ctx context.Context, arg GetCrossIATANei
 			&i.NeighborIata,
 			&i.ObservationCount,
 			&i.LastSeen,
+			&i.Snr,
 		); err != nil {
 			return nil, err
 		}
@@ -217,7 +232,7 @@ SELECT n.id, n.public_key, n.node_type, n.name, n.latitude, n.longitude, n.locat
   (SELECT o.id FROM observers o WHERE o.public_key = n.public_key LIMIT 1) AS observer_id,
   (SELECT json_agg(json_build_object('iata', ni.iata, 'lastHeard', (extract(epoch from ni.last_heard) * 1000)::bigint) ORDER BY ni.last_heard DESC)
    FROM node_iatas ni WHERE ni.node_id = n.id) AS iatas,
-  (SELECT COUNT(*) FROM node_neighbors nn WHERE nn.node_id = n.id)::bigint AS known_neighbor_count
+  (SELECT COUNT(DISTINCT nn.neighbor_id) FROM node_neighbors nn WHERE nn.node_id = n.id)::bigint AS known_neighbor_count
 FROM nodes n
 LEFT JOIN transport_scopes ts ON ts.id = n.default_scope_id
 WHERE n.id = $1
@@ -280,10 +295,21 @@ func (q *Queries) GetNodeByID(ctx context.Context, id uuid.UUID) (GetNodeByIDRow
 	return i, err
 }
 
+const getNodeByPubkey = `-- name: GetNodeByPubkey :one
+SELECT id FROM nodes WHERE public_key = $1
+`
+
+func (q *Queries) GetNodeByPubkey(ctx context.Context, publicKey []byte) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, getNodeByPubkey, publicKey)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const getNodeNeighbors = `-- name: GetNodeNeighbors :many
 SELECT
     n.id, n.public_key, n.name, n.node_type, n.latitude, n.longitude,
-    nn.iata, nn.observation_count, nn.first_seen, nn.last_seen
+    nn.iata, nn.observation_count, nn.first_seen, nn.last_seen, nn.snr
 FROM node_neighbors nn
 JOIN nodes n ON n.id = nn.neighbor_id
 WHERE nn.node_id = $1
@@ -301,6 +327,7 @@ type GetNodeNeighborsRow struct {
 	ObservationCount int64              `json:"observation_count"`
 	FirstSeen        pgtype.Timestamptz `json:"first_seen"`
 	LastSeen         pgtype.Timestamptz `json:"last_seen"`
+	Snr              *float32           `json:"snr"`
 }
 
 // Returns the neighbors of a node with details, ordered by most recently seen.
@@ -324,6 +351,7 @@ func (q *Queries) GetNodeNeighbors(ctx context.Context, nodeID uuid.UUID) ([]Get
 			&i.ObservationCount,
 			&i.FirstSeen,
 			&i.LastSeen,
+			&i.Snr,
 		); err != nil {
 			return nil, err
 		}
@@ -1398,7 +1426,7 @@ INSERT INTO packet_observations (
 ) VALUES (
   $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
 )
-ON CONFLICT (packet_hash, observer_id, heard_at) DO NOTHING
+ON CONFLICT (packet_hash, observer_id) DO NOTHING
 RETURNING id, packet_hash, observer_id, iata, heard_at, path_length_byte, hash_size, hop_count, path_bytes, rssi, snr, propagation_time_ms, radio_freq_mhz, spread_factor, bandwidth_khz, coding_rate, source_broker
 `
 
@@ -2024,7 +2052,12 @@ SELECT n.id, n.public_key, n.node_type, n.name, n.latitude, n.longitude, n.last_
   json_agg(json_build_object('iata', ni.iata, 'lastHeard', (extract(epoch from ni.last_heard) * 1000)::bigint) ORDER BY ni.last_heard DESC) FILTER (WHERE ni.iata IS NOT NULL) AS iatas,
   EXISTS (SELECT 1 FROM observers o WHERE o.public_key = n.public_key) AS is_observer,
   (SELECT o.id FROM observers o WHERE o.public_key = n.public_key LIMIT 1) AS observer_id,
-  (SELECT COUNT(*) FROM node_neighbors nn WHERE nn.node_id = n.id)::bigint AS known_neighbor_count
+  (SELECT COUNT(DISTINCT nn.neighbor_id) FROM node_neighbors nn WHERE nn.node_id = n.id)::bigint AS known_neighbor_count,
+  -- CASE short-circuits: the array_agg subquery only runs when $10 is true,
+  -- so requests that don't ask for neighbor IDs don't pay for it.
+(CASE WHEN $10::bool THEN
+    (SELECT COALESCE(array_agg(DISTINCT nn.neighbor_id), '{}'::uuid[]) FROM node_neighbors nn WHERE nn.node_id = n.id)
+  ELSE NULL END)::uuid[] AS neighbor_ids
 FROM nodes n
 LEFT JOIN node_iatas ni ON ni.node_id = n.id
 LEFT JOIN transport_scopes ts ON ts.id = n.default_scope_id
@@ -2051,15 +2084,16 @@ LIMIT $8
 `
 
 type ListNodesParams struct {
-	Column1 interface{}        `json:"column_1"`
-	Column2 string             `json:"column_2"`
-	Column3 string             `json:"column_3"`
-	Column4 string             `json:"column_4"`
-	Column5 []byte             `json:"column_5"`
-	Column6 interface{}        `json:"column_6"`
-	Column7 pgtype.Timestamptz `json:"column_7"`
-	Limit   int32              `json:"limit"`
-	Column9 string             `json:"column_9"`
+	Column1  interface{}        `json:"column_1"`
+	Column2  string             `json:"column_2"`
+	Column3  string             `json:"column_3"`
+	Column4  string             `json:"column_4"`
+	Column5  []byte             `json:"column_5"`
+	Column6  interface{}        `json:"column_6"`
+	Column7  pgtype.Timestamptz `json:"column_7"`
+	Limit    int32              `json:"limit"`
+	Column9  string             `json:"column_9"`
+	Column10 bool               `json:"column_10"`
 }
 
 type ListNodesRow struct {
@@ -2078,6 +2112,7 @@ type ListNodesRow struct {
 	IsObserver         bool               `json:"is_observer"`
 	ObserverID         uuid.UUID          `json:"observer_id"`
 	KnownNeighborCount int64              `json:"known_neighbor_count"`
+	NeighborIds        []uuid.UUID        `json:"neighbor_ids"`
 }
 
 func (q *Queries) ListNodes(ctx context.Context, arg ListNodesParams) ([]ListNodesRow, error) {
@@ -2091,6 +2126,7 @@ func (q *Queries) ListNodes(ctx context.Context, arg ListNodesParams) ([]ListNod
 		arg.Column7,
 		arg.Limit,
 		arg.Column9,
+		arg.Column10,
 	)
 	if err != nil {
 		return nil, err
@@ -2115,6 +2151,7 @@ func (q *Queries) ListNodes(ctx context.Context, arg ListNodesParams) ([]ListNod
 			&i.IsObserver,
 			&i.ObserverID,
 			&i.KnownNeighborCount,
+			&i.NeighborIds,
 		); err != nil {
 			return nil, err
 		}
@@ -2279,7 +2316,7 @@ SELECT
   o.radio_bw_khz,
   array_remove(array_agg(DISTINCT ts.name ORDER BY ts.name), NULL)::text[] AS scopes,
 COALESCE(CASE
-    WHEN o.last_status_at > NOW() - INTERVAL '5 minutes' THEN 'online'
+    WHEN GREATEST(COALESCE(o.last_status_at, o.last_seen), o.last_seen) > NOW() - INTERVAL '5 minutes' THEN 'online'
     ELSE 'offline'
 END, 'offline')::text AS status,
 COALESCE((
@@ -2302,7 +2339,7 @@ WHERE
   AND ($2 = '' OR o.observer_type = $2)
   AND ($3 = '' OR ob.broker_name = $3)
   AND ($4 = '' OR CASE
-    WHEN o.last_status_at > NOW() - INTERVAL '5 minutes' THEN 'online'
+    WHEN GREATEST(COALESCE(o.last_status_at, o.last_seen), o.last_seen) > NOW() - INTERVAL '5 minutes' THEN 'online'
     ELSE 'offline'
   END = $4)
   AND ($5 = '' OR o.display_name ILIKE '%' || $5 || '%')
@@ -2906,19 +2943,6 @@ func (q *Queries) SetNodeDefaultScope(ctx context.Context, arg SetNodeDefaultSco
 	return err
 }
 
-const clearNodeLocation = `-- name: ClearNodeLocation :exec
-UPDATE nodes SET latitude = NULL, longitude = NULL, location_source = NULL
-WHERE id = $1
-`
-
-// Permanently null a node's stored coordinates. Called on every advert from a
-// node whose name carries the location-redaction marker, so the coordinates
-// never persist in the DB rather than only being masked on read.
-func (q *Queries) ClearNodeLocation(ctx context.Context, id uuid.UUID) error {
-	_, err := q.db.Exec(ctx, clearNodeLocation, id)
-	return err
-}
-
 const setNodeMultibytePaths = `-- name: SetNodeMultibytePaths :exec
 UPDATE nodes SET supports_multibyte_paths = TRUE
 WHERE id = $1 AND supports_multibyte_paths = FALSE
@@ -3241,17 +3265,19 @@ func (q *Queries) UpsertNodeIATA(ctx context.Context, arg UpsertNodeIATAParams) 
 
 const upsertNodeNeighbor = `-- name: UpsertNodeNeighbor :exec
 
-INSERT INTO node_neighbors (node_id, neighbor_id, iata, observation_count)
-VALUES ($1, $2, $3, 1)
+INSERT INTO node_neighbors (node_id, neighbor_id, iata, observation_count, snr)
+VALUES ($1, $2, $3, 1, $4)
 ON CONFLICT (node_id, neighbor_id, iata) DO UPDATE SET
   last_seen         = NOW(),
-  observation_count = node_neighbors.observation_count + 1
+  observation_count = node_neighbors.observation_count + 1,
+  snr               = COALESCE(EXCLUDED.snr, node_neighbors.snr)
 `
 
 type UpsertNodeNeighborParams struct {
 	NodeID     uuid.UUID `json:"node_id"`
 	NeighborID uuid.UUID `json:"neighbor_id"`
 	Iata       string    `json:"iata"`
+	Snr        *float32  `json:"snr"`
 }
 
 // ============================================================
@@ -3259,8 +3285,17 @@ type UpsertNodeNeighborParams struct {
 // ============================================================
 // Records or updates a neighbor relationship between two nodes observed in the same IATA.
 // node_id is the advertising node, neighbor_id is the first-hop forwarder.
+// snr is optional; pass NULL when no signal reading is available (the
+// common case). On conflict, snr is only overwritten when a new non-null
+// value is supplied, so a later no-SNR observation doesn't erase an
+// earlier real reading.
 func (q *Queries) UpsertNodeNeighbor(ctx context.Context, arg UpsertNodeNeighborParams) error {
-	_, err := q.db.Exec(ctx, upsertNodeNeighbor, arg.NodeID, arg.NeighborID, arg.Iata)
+	_, err := q.db.Exec(ctx, upsertNodeNeighbor,
+		arg.NodeID,
+		arg.NeighborID,
+		arg.Iata,
+		arg.Snr,
+	)
 	return err
 }
 

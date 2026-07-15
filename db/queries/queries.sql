@@ -146,7 +146,7 @@ SELECT
   o.radio_bw_khz,
   array_remove(array_agg(DISTINCT ts.name ORDER BY ts.name), NULL)::text[] AS scopes,
 COALESCE(CASE
-    WHEN o.last_status_at > NOW() - INTERVAL '5 minutes' THEN 'online'
+    WHEN GREATEST(COALESCE(o.last_status_at, o.last_seen), o.last_seen) > NOW() - INTERVAL '5 minutes' THEN 'online'
     ELSE 'offline'
 END, 'offline')::text AS status,
 COALESCE((
@@ -169,7 +169,7 @@ WHERE
   AND ($2 = '' OR o.observer_type = $2)
   AND ($3 = '' OR ob.broker_name = $3)
   AND ($4 = '' OR CASE
-    WHEN o.last_status_at > NOW() - INTERVAL '5 minutes' THEN 'online'
+    WHEN GREATEST(COALESCE(o.last_status_at, o.last_seen), o.last_seen) > NOW() - INTERVAL '5 minutes' THEN 'online'
     ELSE 'offline'
   END = $4)
   AND ($5 = '' OR o.display_name ILIKE '%' || $5 || '%')
@@ -427,7 +427,7 @@ INSERT INTO packet_observations (
 ) VALUES (
   $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
 )
-ON CONFLICT (packet_hash, observer_id, heard_at) DO NOTHING
+ON CONFLICT (packet_hash, observer_id) DO NOTHING
 RETURNING *;
 
 -- name: ListObservationsForPacket :many
@@ -481,7 +481,7 @@ SELECT n.*, ts.name AS default_scope_name,
   (SELECT o.id FROM observers o WHERE o.public_key = n.public_key LIMIT 1) AS observer_id,
   (SELECT json_agg(json_build_object('iata', ni.iata, 'lastHeard', (extract(epoch from ni.last_heard) * 1000)::bigint) ORDER BY ni.last_heard DESC)
    FROM node_iatas ni WHERE ni.node_id = n.id) AS iatas,
-  (SELECT COUNT(*) FROM node_neighbors nn WHERE nn.node_id = n.id)::bigint AS known_neighbor_count
+  (SELECT COUNT(DISTINCT nn.neighbor_id) FROM node_neighbors nn WHERE nn.node_id = n.id)::bigint AS known_neighbor_count
 FROM nodes n
 LEFT JOIN transport_scopes ts ON ts.id = n.default_scope_id
 WHERE n.id = $1;
@@ -491,6 +491,9 @@ SELECT id, public_key, name, latitude, longitude
 FROM nodes
 WHERE id = ANY($1::uuid[]);
 
+-- name: GetNodeByPubkey :one
+SELECT id FROM nodes WHERE public_key = $1;
+
 -- name: ListNodes :many
 SELECT n.id, n.public_key, n.node_type, n.name, n.latitude, n.longitude, n.last_seen,
   n.radio_freq_mhz, n.radio_sf, n.radio_bw_khz,
@@ -498,7 +501,12 @@ SELECT n.id, n.public_key, n.node_type, n.name, n.latitude, n.longitude, n.last_
   json_agg(json_build_object('iata', ni.iata, 'lastHeard', (extract(epoch from ni.last_heard) * 1000)::bigint) ORDER BY ni.last_heard DESC) FILTER (WHERE ni.iata IS NOT NULL) AS iatas,
   EXISTS (SELECT 1 FROM observers o WHERE o.public_key = n.public_key) AS is_observer,
   (SELECT o.id FROM observers o WHERE o.public_key = n.public_key LIMIT 1) AS observer_id,
-  (SELECT COUNT(*) FROM node_neighbors nn WHERE nn.node_id = n.id)::bigint AS known_neighbor_count
+  (SELECT COUNT(DISTINCT nn.neighbor_id) FROM node_neighbors nn WHERE nn.node_id = n.id)::bigint AS known_neighbor_count,
+  -- CASE short-circuits: the array_agg subquery only runs when $10 is true,
+  -- so requests that don't ask for neighbor IDs don't pay for it.
+(CASE WHEN $10::bool THEN
+    (SELECT COALESCE(array_agg(DISTINCT nn.neighbor_id), '{}'::uuid[]) FROM node_neighbors nn WHERE nn.node_id = n.id)
+  ELSE NULL END)::uuid[] AS neighbor_ids
 FROM nodes n
 LEFT JOIN node_iatas ni ON ni.node_id = n.id
 LEFT JOIN transport_scopes ts ON ts.id = n.default_scope_id
@@ -891,17 +899,22 @@ ORDER BY hop_count ASC, last_seen DESC;
 -- name: UpsertNodeNeighbor :exec
 -- Records or updates a neighbor relationship between two nodes observed in the same IATA.
 -- node_id is the advertising node, neighbor_id is the first-hop forwarder.
-INSERT INTO node_neighbors (node_id, neighbor_id, iata, observation_count)
-VALUES ($1, $2, $3, 1)
+-- snr is optional; pass NULL when no signal reading is available (the
+-- common case). On conflict, snr is only overwritten when a new non-null
+-- value is supplied, so a later no-SNR observation doesn't erase an
+-- earlier real reading.
+INSERT INTO node_neighbors (node_id, neighbor_id, iata, observation_count, snr)
+VALUES ($1, $2, $3, 1, $4)
 ON CONFLICT (node_id, neighbor_id, iata) DO UPDATE SET
   last_seen         = NOW(),
-  observation_count = node_neighbors.observation_count + 1;
+  observation_count = node_neighbors.observation_count + 1,
+  snr               = COALESCE(EXCLUDED.snr, node_neighbors.snr);
 
 -- name: GetNodeNeighbors :many
 -- Returns the neighbors of a node with details, ordered by most recently seen.
 SELECT
     n.id, n.public_key, n.name, n.node_type, n.latitude, n.longitude,
-    nn.iata, nn.observation_count, nn.first_seen, nn.last_seen
+    nn.iata, nn.observation_count, nn.first_seen, nn.last_seen, nn.snr
 FROM node_neighbors nn
 JOIN nodes n ON n.id = nn.neighbor_id
 WHERE nn.node_id = $1
@@ -911,7 +924,7 @@ ORDER BY nn.last_seen DESC;
 -- Returns neighbors of a node that are in a different IATA.
 SELECT
     n.id, n.name, n.node_type, n.latitude, n.longitude,
-    nn.iata AS neighbor_iata, nn.observation_count, nn.last_seen
+    nn.iata AS neighbor_iata, nn.observation_count, nn.last_seen, nn.snr
 FROM node_neighbors nn
 JOIN nodes n ON n.id = nn.neighbor_id
 WHERE nn.node_id = $1

@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
-	"strings"
 	"time"
 
 	sqlc "github.com/MeshCore-Beacon/beacon-server/db/sqlc"
@@ -21,8 +20,19 @@ type tracePayload struct {
 	SNRValues  []float32 `json:"snrValues"`
 }
 
+func (s *Store) UpsertTraceIATA(ctx context.Context, traceTag []byte, iata string, heardAt time.Time) error {
+	return s.q.UpsertTraceIATA(ctx, sqlc.UpsertTraceIATAParams{
+		TraceTag:  traceTag,
+		Iata:      iata,
+		LastHeard: pgtype.Timestamptz{Time: heardAt, Valid: true},
+	})
+}
+
+func (s *Store) DeleteOldTraceIATAs(ctx context.Context, cutoff time.Time) error {
+	return s.q.DeleteOldTraceIATAs(ctx, pgtype.Timestamptz{Time: cutoff, Valid: true})
+}
+
 func (s *Store) ListTraceTags(ctx context.Context, iatas []string, scope, traceType string, since, until time.Time, cursor time.Time, limit int32) ([]api.TraceTagSummary, error) {
-	iataFilter := strings.Join(iatas, ",")
 	var sinceTS, untilTS, cursorTS pgtype.Timestamptz
 	if !since.IsZero() {
 		sinceTS = pgtype.Timestamptz{Time: since, Valid: true}
@@ -34,7 +44,7 @@ func (s *Store) ListTraceTags(ctx context.Context, iatas []string, scope, traceT
 		cursorTS = pgtype.Timestamptz{Time: cursor, Valid: true}
 	}
 	rows, err := s.q.ListTraceTags(ctx, sqlc.ListTraceTagsParams{
-		Column1: iataFilter,
+		Column1: iatas,
 		Column2: scope,
 		Column3: sinceTS,
 		Column4: untilTS,

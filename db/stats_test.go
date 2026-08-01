@@ -20,7 +20,7 @@ func TestGetStatsOverview(t *testing.T) {
 	mock := mockdb.NewMockQuerier(ctrl)
 
 	mock.EXPECT().
-		GetStatsOverview(gomock.Any(), "YVR").
+		GetStatsOverview(gomock.Any(), []string{"YVR"}).
 		Return(sqlc.GetStatsOverviewRow{
 			TotalPackets:      100,
 			TotalObservations: 500,
@@ -51,7 +51,7 @@ func TestGetStatsTopNodes_NilObservationCount(t *testing.T) {
 
 	mock.EXPECT().
 		GetTopNodes(gomock.Any(), sqlc.GetTopNodesParams{
-			Column1: "YVR",
+			Column1: []string{"YVR"},
 			Limit:   5,
 		}).
 		Return([]sqlc.MvTopNodesByIatum{
@@ -114,12 +114,96 @@ func TestGetStatsTopObservers_IATATypeAssertion(t *testing.T) {
 	}
 }
 
+func TestGetStatsTopAdvertisers_FloodDirectSplit(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	mock := mockdb.NewMockQuerier(ctrl)
+
+	nodeID := uuid.MustParse("00000000-0000-0000-0000-000000000003")
+	name := "test-node"
+	heardAt := pgtype.Timestamptz{Time: time.Now(), Valid: true}
+
+	mock.EXPECT().
+		GetStatsTopAdvertisers(gomock.Any(), gomock.Any()).
+		Return([]sqlc.GetStatsTopAdvertisersRow{
+			{
+				ID:                nodeID,
+				Name:              &name,
+				NodeType:          2, // repeater
+				AdvertCount:       10,
+				FloodAdvertCount:  7,
+				DirectAdvertCount: 3,
+				LastHeard:         heardAt,
+				Iata:              "YVR",
+			},
+		}, nil)
+
+	store := &Store{q: mock}
+	items, err := store.GetStatsTopAdvertisers(context.Background(), []string{"YVR"}, time.Now().Add(-time.Hour), 5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if items[0].AdvertCount != 10 {
+		t.Errorf("expected AdvertCount 10, got %d", items[0].AdvertCount)
+	}
+	if items[0].FloodAdvertCount != 7 {
+		t.Errorf("expected FloodAdvertCount 7, got %d", items[0].FloodAdvertCount)
+	}
+	if items[0].DirectAdvertCount != 3 {
+		t.Errorf("expected DirectAdvertCount 3, got %d", items[0].DirectAdvertCount)
+	}
+	if items[0].FloodAdvertCount+items[0].DirectAdvertCount != items[0].AdvertCount {
+		t.Error("expected FloodAdvertCount + DirectAdvertCount to equal AdvertCount")
+	}
+}
+
+func TestGetStatsClockDrift_Mapping(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	mock := mockdb.NewMockQuerier(ctrl)
+
+	nodeID := uuid.MustParse("00000000-0000-0000-0000-000000000004")
+	name := "drifty-repeater"
+	drift := int32(-600)
+	checkedAt := pgtype.Timestamptz{Time: time.Now(), Valid: true}
+	iatasJSON := []byte(`[{"iata":"YVR","lastHeard":1700000000000}]`)
+
+	mock.EXPECT().
+		GetStatsClockDrift(gomock.Any(), gomock.Any()).
+		Return([]sqlc.GetStatsClockDriftRow{
+			{
+				ID:                      nodeID,
+				Name:                    &name,
+				NodeType:                2, // repeater
+				DeviceClockDriftSeconds: &drift,
+				LastAdvertAt:            checkedAt,
+				Iatas:                   iatasJSON,
+			},
+		}, nil)
+
+	store := &Store{q: mock, clockDriftThreshold: 5 * time.Minute}
+	items, err := store.GetStatsClockDrift(context.Background(), []string{"YVR"}, 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if items[0].ClockDriftSeconds != -600 {
+		t.Errorf("expected ClockDriftSeconds -600, got %d", items[0].ClockDriftSeconds)
+	}
+	if len(items[0].IATAs) != 1 || items[0].IATAs[0].IATA != "YVR" {
+		t.Errorf("expected 1 IATA entry for YVR, got %v", items[0].IATAs)
+	}
+}
+
 func TestGetStatsNodeTypes_Mapping(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	mock := mockdb.NewMockQuerier(ctrl)
 
 	mock.EXPECT().
-		GetStatsNodeTypes(gomock.Any(), "YVR").
+		GetStatsNodeTypes(gomock.Any(), []string{"YVR"}).
 		Return([]sqlc.GetStatsNodeTypesRow{
 			{NodeType: 1, Count: 10},
 			{NodeType: 2, Count: 5},

@@ -6,6 +6,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -30,6 +31,11 @@ type Reader interface {
 	// Returns nil, error if the IATA code is not found.
 	GetIATA(ctx context.Context, iata string) (*IATA, error)
 
+	// GetIATABorder returns the raw GeoJSON Feature JSON for the given IATA's border. Returns
+	// nil (no error) if the IATA exists but has no border configured -- the client renders
+	// that as "nothing to draw", not an error. Returns an error if the IATA itself is unknown.
+	GetIATABorder(ctx context.Context, iata string) (json.RawMessage, error)
+
 	// ListRegions returns a summary list of all regions ordered by display_order then name.
 	// Use GetRegion for full detail including associated IATAs.
 	ListRegions(ctx context.Context) ([]RegionSummary, error)
@@ -44,9 +50,10 @@ type Reader interface {
 
 	// ListChannels returns a paginated list of channels ordered by last seen.
 	// Includes both hashtag-derived and explicit key channels.
-	// Pass nil hash to skip hash filtering. Pass empty string iata to return all channels.
+	// Pass nil hash to skip hash filtering. Pass empty iatas to return all channels;
+	// IATAs must be uppercase.
 	// cursor is last_seen epoch ms of the last item; pass 0 to start from the beginning.
-	ListChannels(ctx context.Context, limit int32, hash []byte, iata string, cursor int64) (Page[ChannelSummary], error)
+	ListChannels(ctx context.Context, limit int32, hash []byte, iatas []string, cursor int64) (Page[ChannelSummary], error)
 
 	// GetChannel returns full detail for a single channel by its integer ID.
 	// Returns nil, pgx.ErrNoRows if the channel is not found.
@@ -100,7 +107,7 @@ type Reader interface {
 	// When includeNeighbors is true, each NodeSummary's NeighborIDs field is
 	// populated with the distinct set of neighbor node IDs (across all
 	// IATAs); otherwise it's left nil to avoid the extra aggregation.
-	ListNodes(ctx context.Context, nodeType int16, iatas []string, supportsMultibytePaths, supportsMultibyteTraces *bool, pubkey []byte, name, scope string, cursor int64, limit int32, includeNeighbors bool) (Page[NodeSummary], error)
+	ListNodes(ctx context.Context, nodeType int16, iatas []string, supportsMultibytePaths, supportsMultibyteTraces *bool, pubkey []byte, pubkeyPrefix, name, scope string, cursor int64, limit int32, includeNeighbors bool) (Page[NodeSummary], error)
 
 	// GetNode returns full detail for a single node by UUID.
 	// Returns nil, pgx.ErrNoRows if the node is not found.
@@ -116,8 +123,12 @@ type Reader interface {
 	// ListPackets returns a paginated list of packets with the latest observation rolled in.
 	// Pass 0 for payloadType/routeType to skip those filters.
 	// Pass nil for iatas, zero times for since/until to skip those filters.
-	// cursor is last_heard_at epoch ms; pass 0 to start from the beginning.
-	ListPackets(ctx context.Context, payloadType, routeType int16, iatas []string, scope string, since, until time.Time, cursor int64, limit int32) (Page[PacketSummary], error)
+	// Unfiltered lists order by global last_heard_at; when iatas are set, ordering
+	// and the cursor are site-local (heard_at at the requested sites) instead.
+	// cursor is epoch ms in either case; pass 0 to start from the beginning.
+	// payloadTypes/routeTypes/scopes are OR'd within each filter, ANDed across filters; pass
+	// nil/empty to skip a filter.
+	ListPackets(ctx context.Context, payloadTypes, routeTypes []int16, iatas []string, scopes []string, since, until time.Time, cursor int64, limit int32) (Page[PacketSummary], error)
 
 	// ListPacketsAfterID returns packets with observations after the given observation ID,
 	// ordered oldest first. Used for WS reconnect backfill.
@@ -152,6 +163,22 @@ type Reader interface {
 	// Pass nil for iatas to return stats across all IATAs.
 	// since defines the start of the window; pass zero time for default (last 24h).
 	GetStatsTopObservers(ctx context.Context, iatas []string, since time.Time, limit int32) ([]TopObserver, error)
+
+	// GetStatsTopAdvertisers returns the top N nodes by distinct ADVERT packet count.
+	// Pass nil for iatas to return stats across all IATAs.
+	// since defines the start of the window; pass zero time for default (last 24h).
+	GetStatsTopAdvertisers(ctx context.Context, iatas []string, since time.Time, limit int32) ([]TopAdvertiser, error)
+
+	// GetStatsClockDrift returns repeaters/room servers whose most recent advert-derived
+	// clock drift exceeds the configured threshold (nodes.clock_drift_threshold), worst
+	// drift first. Pass nil for iatas to return across all IATAs. Unlike the other stats
+	// endpoints this isn't time-windowed -- it reflects each node's current drift state.
+	GetStatsClockDrift(ctx context.Context, iatas []string, limit int32) ([]ClockDriftEntry, error)
+
+	// GetStatsTopTalkers returns the top N companion names by decrypted channel message count.
+	// Pass nil for iatas to return stats across all IATAs.
+	// since defines the start of the window; pass zero time for default (last 24h).
+	GetStatsTopTalkers(ctx context.Context, iatas []string, since time.Time, limit int32) ([]TopTalker, error)
 
 	// GetScopeStats returns aggregate packet, observer and node counts per transport scope.
 	GetScopeStats(ctx context.Context) ([]ScopeStats, error)

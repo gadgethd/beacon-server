@@ -26,6 +26,7 @@ import (
 	"github.com/MeshCore-Beacon/beacon-server/internal/iatadb"
 	"github.com/MeshCore-Beacon/beacon-server/internal/ingest"
 	"github.com/MeshCore-Beacon/beacon-server/internal/keystore"
+	"github.com/MeshCore-Beacon/beacon-server/internal/presence"
 	"github.com/MeshCore-Beacon/beacon-server/internal/scopestore"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -37,7 +38,7 @@ import (
 var version = "dev"
 
 //	@title			MeshCore Beacon API
-//	@version		1.5.4
+//	@version		1.6.0
 //	@description	MeshCore network observation backend. Ingests LoRa packets from MQTT brokers, stores in PostgreSQL, and streams live events via WebSocket.
 //	@termsOfService	https://github.com/MeshCore-Beacon/beacon-server
 
@@ -109,7 +110,12 @@ func main() {
 		log.Fatalf("migrations failed: %v", err)
 	}
 
-	store := db.New(pool)
+	store := db.New(pool, resolved.ClockDriftThreshold, resolved.NodeStaleThreshold)
+
+	// ── Presence write coalescing ────────────────────────────────────────────
+	// Ingest writes go through the coalescer; reads keep using the store.
+	coalescer := presence.New(store, resolved.PresenceFlushInterval, resolved.PresencePacketTTL)
+	go coalescer.Run(ctx)
 
 	// ── Redis cache layer ────────────────────────────────────────────────────
 	var reader api.Reader = store
@@ -191,6 +197,17 @@ func main() {
 
 	keys := keystore.NewMapKeyStore(entries)
 
+	// ── Backfill channel messages ────────────────────────────────────────────
+	// Packets whose channel key wasn't yet configured at ingest time were stored as
+	// hash-only channels and never decrypted. Retry them now against the keystore we just
+	// built, so adding a channel key to the config surfaces its history on the next boot
+	// instead of leaving it stranded in the DB indefinitely.
+	if n, err := ingest.BackfillChannelMessages(ctx, store, keys); err != nil {
+		log.Printf("config: channel message backfill failed: %v", err)
+	} else if n > 0 {
+		log.Printf("config: backfilled %d previously-undecrypted channel message(s)", n)
+	}
+
 	// ── Build geographic ingest filter ───────────────────────────────────────────────────────────
 	allowedIATAs := iatadb.BuildAllowedSet(cfg.Ingest.AllowCountries, cfg.Ingest.AllowContinents)
 	if allowedIATAs != nil {
@@ -209,7 +226,7 @@ func main() {
 			TelemetryResolution: resolved.TelemetryResolution,
 			AllowedIATAs:        allowedIATAs,
 		},
-		store,
+		coalescer,
 		h,
 		keys,
 		scopes,
@@ -224,7 +241,7 @@ func main() {
 			TelemetryResolution: resolved.TelemetryResolution,
 			AllowedIATAs:        allowedIATAs,
 		},
-		store,
+		coalescer,
 		h,
 		keys,
 		scopes,
@@ -240,7 +257,7 @@ func main() {
 
 	scheduler := background.New([]background.Task{
 		background.ViewRefreshTask(store, resolved.ViewRefreshInterval),
-		background.CleanupTask(store, resolved.TelemetryRetention, resolved.PacketRetention, resolved.CleanupInterval),
+		background.CleanupTask(store, resolved.TelemetryRetention, resolved.PacketRetention, resolved.NodeDeleteAfter, resolved.CleanupInterval),
 		background.ReconfirmTask(store, resolved.ReconfirmInterval),
 	})
 	go scheduler.Start(ctx)
@@ -272,6 +289,7 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Printf("server shutdown error: %v", err)
 	}
+	coalescer.Flush(shutdownCtx)
 }
 
 // getEnv returns the value of an env var and logs a warning if it is unset.

@@ -5,6 +5,7 @@ package cache
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -36,7 +37,11 @@ func (s *stubReader) ListIATAs(_ context.Context) ([]api.IATA, error) {
 }
 
 // implement remaining api.Reader methods as no-ops
-func (s *stubReader) GetIATA(_ context.Context, _ string) (*api.IATA, error)     { return nil, nil }
+func (s *stubReader) GetIATA(_ context.Context, _ string) (*api.IATA, error) { return nil, nil }
+
+func (s *stubReader) GetIATABorder(_ context.Context, _ string) (json.RawMessage, error) {
+	return nil, nil
+}
 func (s *stubReader) ListRegions(_ context.Context) ([]api.RegionSummary, error) { return nil, nil }
 func (s *stubReader) GetRegion(_ context.Context, _ int32) (*api.Region, error)  { return nil, nil }
 func (s *stubReader) GetRegionBySlug(_ context.Context, _ string) (*api.Region, error) {
@@ -69,6 +74,18 @@ func (s *stubReader) GetStatsTopNodes(_ context.Context, _ []string, _ int32) ([
 }
 
 func (s *stubReader) GetStatsTopObservers(_ context.Context, _ []string, _ time.Time, _ int32) ([]api.TopObserver, error) {
+	return nil, nil
+}
+
+func (s *stubReader) GetStatsTopAdvertisers(_ context.Context, _ []string, _ time.Time, _ int32) ([]api.TopAdvertiser, error) {
+	return nil, nil
+}
+
+func (s *stubReader) GetStatsClockDrift(_ context.Context, _ []string, _ int32) ([]api.ClockDriftEntry, error) {
+	return nil, nil
+}
+
+func (s *stubReader) GetStatsTopTalkers(_ context.Context, _ []string, _ time.Time, _ int32) ([]api.TopTalker, error) {
 	return nil, nil
 }
 
@@ -120,7 +137,7 @@ func (s *stubReader) GetCrossIATANeighbors(_ context.Context, _ uuid.UUID, _ str
 	return nil, nil
 }
 
-func (s *stubReader) ListChannels(_ context.Context, _ int32, _ []byte, _ string, _ int64) (api.Page[api.ChannelSummary], error) {
+func (s *stubReader) ListChannels(_ context.Context, _ int32, _ []byte, _ []string, _ int64) (api.Page[api.ChannelSummary], error) {
 	return api.Page[api.ChannelSummary]{}, nil
 }
 
@@ -136,7 +153,7 @@ func (s *stubReader) ListMessagesAfterID(_ context.Context, _ int64, _ []string,
 	return nil, nil
 }
 
-func (s *stubReader) ListNodes(_ context.Context, _ int16, _ []string, _, _ *bool, _ []byte, _, _ string, _ int64, _ int32, _ bool) (api.Page[api.NodeSummary], error) {
+func (s *stubReader) ListNodes(_ context.Context, _ int16, _ []string, _, _ *bool, _ []byte, _, _, _ string, _ int64, _ int32, _ bool) (api.Page[api.NodeSummary], error) {
 	return api.Page[api.NodeSummary]{}, nil
 }
 
@@ -152,7 +169,7 @@ func (s *stubReader) ListObserverAdverts(_ context.Context, _ uuid.UUID, _ int64
 	return api.Page[api.AdvertObservation]{}, nil
 }
 
-func (s *stubReader) ListPackets(_ context.Context, _, _ int16, _ []string, _ string, _, _ time.Time, _ int64, _ int32) (api.Page[api.PacketSummary], error) {
+func (s *stubReader) ListPackets(_ context.Context, _, _ []int16, _ []string, _ []string, _, _ time.Time, _ int64, _ int32) (api.Page[api.PacketSummary], error) {
 	return api.Page[api.PacketSummary]{}, nil
 }
 

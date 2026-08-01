@@ -177,6 +177,11 @@ type stubDB struct {
 	upsertNodeCalls            int
 	upsertChannelCalls         int
 	upsertChannelHashOnlyCalls int
+	upsertChannelIATACalls     int
+	upsertTraceIATACalls       int
+	observationInserted        bool
+	insertChannelMessageResult bool // configurable return for InsertChannelMessage; default false
+	undecryptedPackets         []UndecryptedPacket
 }
 
 type setCapabilityCall struct {
@@ -201,7 +206,7 @@ func (s *stubDB) UpsertPacket(_ context.Context, _ UpsertPacketParams) (bool, er
 }
 func (s *stubDB) SetPacketDecrypted(_ context.Context, _ []byte) error { return nil }
 func (s *stubDB) InsertObservation(_ context.Context, _ InsertObservationParams) (bool, error) {
-	return false, nil
+	return s.observationInserted, nil
 }
 func (s *stubDB) SetNodeDefaultScope(_ context.Context, _ uuid.UUID, _ int32) error { return nil }
 func (s *stubDB) UpsertNode(_ context.Context, _ UpsertNodeParams, _ RadioSettings) (uuid.UUID, error) {
@@ -218,8 +223,12 @@ func (s *stubDB) GetNodeByPubkey(_ context.Context, _ []byte) (uuid.UUID, error)
 	return uuid.Nil, errors.New("not found")
 }
 
+func (s *stubDB) GetNodesByIDs(_ context.Context, _ []uuid.UUID) (map[uuid.UUID]*api.ResolvedNode, error) {
+	return nil, nil
+}
+
 func (s *stubDB) InsertChannelMessage(_ context.Context, _ InsertChannelMessageParams) (bool, error) {
-	return false, nil
+	return s.insertChannelMessageResult, nil
 }
 
 func (s *stubDB) UpdateObserverStatus(_ context.Context, _ UpdateObserverStatusParams) (uuid.UUID, error) {
@@ -254,6 +263,20 @@ func (s *stubDB) UpsertChannelHashOnly(_ context.Context, _ []byte) (int, error)
 	return 0, nil
 }
 
+func (s *stubDB) ListUndecryptedGroupTextPackets(_ context.Context) ([]UndecryptedPacket, error) {
+	return s.undecryptedPackets, nil
+}
+
+func (s *stubDB) UpsertChannelIATA(_ context.Context, _ []byte, _ string, _ time.Time) error {
+	s.upsertChannelIATACalls++
+	return nil
+}
+
+func (s *stubDB) UpsertTraceIATA(_ context.Context, _ []byte, _ string, _ time.Time) error {
+	s.upsertTraceIATACalls++
+	return nil
+}
+
 func (s *stubDB) GetPacketObservationCount(_ context.Context, _ []byte) (int64, error) {
 	return 0, nil
 }
@@ -264,7 +287,11 @@ func (s *stubDB) UpsertKnownRoute(_ context.Context, _ []uuid.UUID, _ [][]byte, 
 	return nil
 }
 
-func (s *stubDB) UpsertNodeNeighbor(_ context.Context, _, _ uuid.UUID, _ string, _ *float32) error {
+func (s *stubDB) UpsertNodeNeighbor(_ context.Context, _, _ uuid.UUID, _ string, _ *float32, _ *string) error {
+	return nil
+}
+
+func (s *stubDB) UpdateObserverRegionScope(_ context.Context, _ uuid.UUID, _ string) error {
 	return nil
 }
 

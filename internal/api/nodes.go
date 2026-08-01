@@ -43,11 +43,16 @@ type NodeSummary struct {
 	ObserverID         *uuid.UUID  `json:"observerId,omitempty"`   // UUID of the associated observer row, if any
 	Latitude           *float64    `json:"lat,omitempty"`          // decimal degrees, from advert AppData
 	Longitude          *float64    `json:"lng,omitempty"`          // decimal degrees, from advert AppData
-	Radio              *string     `json:"radio,omitempty"`        // shorthand: "freqMhz,bwKhz,sf" e.g. "910.5,62.5,7"
+	Radio              *string     `json:"radio,omitempty"`        // shorthand: "freqMhz,bwKhz,sf" e.g. "910.525,62.5,7"
 	IATAs              []NodeIATA  `json:"iatas"`                  // IATAs where this node has been heard, with last heard timestamps
 	DefaultScope       *string     `json:"defaultScope,omitempty"` // most recently matched transport scope name e.g. "#bc"
 	KnownNeighborCount int64       `json:"knownNeighborCount"`
 	NeighborIDs        []uuid.UUID `json:"neighborIds,omitempty"` // only populated when the list request opts in; see ?neighbors=true
+	// Stale is true when the node hasn't been seen (last_seen) within the configured
+	// staleness window (default 24h; internal/config.ResolvedConfig.NodeStaleThreshold).
+	// Applies to every node type, unlike ClockDriftSeconds/ClockOutOfSync on Node, which
+	// are repeater/room-server only.
+	Stale bool `json:"stale"`
 }
 
 // Node is the full node representation including firmware capability flags,
@@ -63,6 +68,15 @@ type Node struct {
 	LastSeen                int64          `json:"lastSeen"`                     // epoch ms
 	Metadata                any            `json:"metadata,omitempty"`           // raw JSONB metadata
 	Neighbors               []NodeNeighbor `json:"neighbors"`
+	// Clock drift, repeaters/room servers only (nodeType 2/3); omitted entirely for other
+	// node types or when no qualifying advert has been measured yet. Device minus server
+	// time, in seconds, from the advert's self-reported timestamp: +ve = device ahead.
+	// clockCheckedAt is the server receive time of the advert this was measured from (same
+	// moment as lastAdvertAt). clockOutOfSync is |clockDriftSeconds| exceeding a configured
+	// threshold (default 5m) -- see internal/config.ResolvedConfig.ClockDriftThreshold.
+	ClockDriftSeconds *int   `json:"clockDriftSeconds,omitempty"`
+	ClockOutOfSync    *bool  `json:"clockOutOfSync,omitempty"`
+	ClockCheckedAt    *int64 `json:"clockCheckedAt,omitempty"`
 }
 
 // NodeTypeName returns a human-readable name for a node type integer.

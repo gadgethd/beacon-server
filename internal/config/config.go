@@ -8,6 +8,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -26,6 +27,8 @@ type Config struct {
 	Cache       CacheConfig           `yaml:"cache"`
 	CORS        CORSConfig            `yaml:"cors"`
 	Background  BackgroundConfig      `yaml:"background"`
+	Presence    PresenceConfig        `yaml:"presence"`
+	Nodes       NodesConfig           `yaml:"nodes"`
 }
 
 // ResolvedConfig holds all runtime configuration with defaults applied.
@@ -37,6 +40,32 @@ type ResolvedConfig struct {
 	ViewRefreshInterval time.Duration
 	ReconfirmInterval   time.Duration
 	CleanupInterval     time.Duration
+
+	PresenceFlushInterval time.Duration
+	PresencePacketTTL     time.Duration
+
+	// ClockDriftThreshold is the |device clock - server clock| magnitude, measured from a
+	// node's ADVERT timestamp, above which the node API reports clockOutOfSync=true for
+	// that node. Only meaningful for repeaters/room servers (nodeType 2/3).
+	ClockDriftThreshold time.Duration
+
+	// NodeStaleThreshold and NodeDeleteAfter mirror ClockDriftThreshold's "0 means unset,
+	// resolve to a default" pattern -- see NodesConfig.
+	NodeStaleThreshold time.Duration
+	NodeDeleteAfter    time.Duration
+}
+
+// PresenceConfig controls coalescing of presence bookkeeping writes
+// (observer last_seen, observer_brokers, packet last_heard_at bumps).
+type PresenceConfig struct {
+	// FlushInterval is how often coalesced bumps are flushed to Postgres.
+	// Defaults to 30s if not set.
+	FlushInterval duration `yaml:"flush_interval"`
+
+	// PacketTTL is how long a packet hash with no re-observations stays
+	// coalesced before the next observation writes through again.
+	// Defaults to 30s if not set.
+	PacketTTL duration `yaml:"packet_ttl"`
 }
 
 // BackgroundConfig controls the intervals for background maintenance tasks.
@@ -148,6 +177,21 @@ type PacketsConfig struct {
 	Retention duration `yaml:"retention"`
 }
 
+// NodesConfig controls node-derived signal thresholds.
+type NodesConfig struct {
+	// ClockDriftThreshold is the |device clock - server clock| magnitude, measured from a
+	// repeater/room server's ADVERT timestamp, above which the node API reports
+	// clockOutOfSync=true for that node. Defaults to 5m if not set.
+	ClockDriftThreshold duration `yaml:"clock_drift_threshold"`
+	// StaleThreshold is how long since a node's last_seen before the node API reports
+	// stale=true for it. Defaults to 24h if not set.
+	StaleThreshold duration `yaml:"stale_threshold"`
+	// DeleteAfter is how long since a node's last_seen before the cleanup job deletes the
+	// node entirely. Defaults to the same 30-day default as packets.retention if not set --
+	// independently configurable from it, just the same starting point.
+	DeleteAfter duration `yaml:"delete_after"`
+}
+
 // duration is a wrapper around time.Duration that supports YAML unmarshalling
 // from human-readable strings like "24h", "7d", "30d".
 type duration struct {
@@ -191,6 +235,11 @@ type IATAConfig struct {
 	Name string   `yaml:"name"`
 	Lat  *float64 `yaml:"lat"`
 	Lng  *float64 `yaml:"lng"`
+	// BorderFile is a path to a GeoJSON Feature file (Polygon or MultiPolygon geometry) for
+	// this IATA's region border map. Relative paths are resolved against the directory
+	// containing the main config file (see Load). Validated and bbox-computed at seed time --
+	// see border.go.
+	BorderFile string `yaml:"borderFile"`
 }
 
 // RegionConfig defines a super-region and its member IATAs.
@@ -237,6 +286,13 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, err
 	}
+	configDir := filepath.Dir(path)
+	for iata, details := range cfg.IATAs {
+		if details.BorderFile != "" && !filepath.IsAbs(details.BorderFile) {
+			details.BorderFile = filepath.Join(configDir, details.BorderFile)
+			cfg.IATAs[iata] = details
+		}
+	}
 	return cfg, nil
 }
 
@@ -250,6 +306,13 @@ func Resolve(cfg *Config) ResolvedConfig {
 		ViewRefreshInterval: cfg.Background.ViewRefresh.Duration,
 		ReconfirmInterval:   cfg.Background.Reconfirm.Duration,
 		CleanupInterval:     cfg.Background.Cleanup.Duration,
+
+		PresenceFlushInterval: cfg.Presence.FlushInterval.Duration,
+		PresencePacketTTL:     cfg.Presence.PacketTTL.Duration,
+
+		ClockDriftThreshold: cfg.Nodes.ClockDriftThreshold.Duration,
+		NodeStaleThreshold:  cfg.Nodes.StaleThreshold.Duration,
+		NodeDeleteAfter:     cfg.Nodes.DeleteAfter.Duration,
 	}
 	if r.TelemetryResolution == 0 {
 		r.TelemetryResolution = time.Hour
@@ -272,13 +335,32 @@ func Resolve(cfg *Config) ResolvedConfig {
 	if r.CleanupInterval == 0 {
 		r.CleanupInterval = time.Hour
 	}
+	if r.PresenceFlushInterval == 0 {
+		r.PresenceFlushInterval = 30 * time.Second
+	}
+	if r.PresencePacketTTL == 0 {
+		r.PresencePacketTTL = 30 * time.Second
+	}
+	if r.ClockDriftThreshold == 0 {
+		r.ClockDriftThreshold = 5 * time.Minute
+	}
+	if r.NodeStaleThreshold == 0 {
+		r.NodeStaleThreshold = 24 * time.Hour
+	}
+	if r.NodeDeleteAfter == 0 {
+		// Same default as packets.retention (30 days) -- independently configurable, just
+		// the same starting point, not tied to whatever PacketRetention resolves to.
+		r.NodeDeleteAfter = 30 * 24 * time.Hour
+	}
 	return r
 }
 
 func (r ResolvedConfig) String() string {
 	return fmt.Sprintf(
-		"telemetryResolution=%s telemetryRetention=%s packetRetention=%s maxConnsPerIP=%d viewRefresh=%s reconfirm=%s cleanup=%s",
+		"telemetryResolution=%s telemetryRetention=%s packetRetention=%s maxConnsPerIP=%d viewRefresh=%s reconfirm=%s cleanup=%s presenceFlush=%s presencePacketTTL=%s clockDriftThreshold=%s nodeStaleThreshold=%s nodeDeleteAfter=%s",
 		r.TelemetryResolution, r.TelemetryRetention, r.PacketRetention,
 		r.MaxConnsPerIP, r.ViewRefreshInterval, r.ReconfirmInterval, r.CleanupInterval,
+		r.PresenceFlushInterval, r.PresencePacketTTL, r.ClockDriftThreshold,
+		r.NodeStaleThreshold, r.NodeDeleteAfter,
 	)
 }

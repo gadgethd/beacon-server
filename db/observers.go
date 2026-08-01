@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
-	"strings"
 	"time"
 
 	sqlc "github.com/MeshCore-Beacon/beacon-server/db/sqlc"
@@ -35,9 +34,8 @@ func (s *Store) ListObservers(ctx context.Context, iatas []string, observerType,
 	if cursor > 0 {
 		cursorTS = pgtype.Timestamptz{Time: time.UnixMilli(cursor), Valid: true}
 	}
-	iataFilter := strings.Join(iatas, ",")
 	params := sqlc.ListObserversParams{
-		Column1: iataFilter,
+		Column1: iatas,
 		Column2: observerType,
 		Column3: broker,
 		Column4: status,
@@ -63,7 +61,7 @@ func (s *Store) ListObservers(ctx context.Context, iatas []string, observerType,
 			Scopes: v.Scopes,
 		}
 		if v.RadioFreqMhz != nil && v.RadioSf != nil && v.RadioBwKhz != nil {
-			s := fmt.Sprintf("%.1f,%g,%d", *v.RadioFreqMhz, *v.RadioBwKhz, *v.RadioSf)
+			s := fmt.Sprintf("%g,%g,%d", *v.RadioFreqMhz, *v.RadioBwKhz, *v.RadioSf)
 			observer.Radio = &s
 		}
 		if v.DisplayName != nil {
@@ -314,6 +312,17 @@ func (s *Store) UpsertObserverScope(ctx context.Context, observerID uuid.UUID, s
 	return s.q.UpsertObserverScope(ctx, sqlc.UpsertObserverScopeParams{
 		ObserverID: observerID,
 		ScopeID:    scopeID,
+	})
+}
+
+// UpdateObserverRegionScope records the observer's own OTA-reported region scope
+// (the "self" field of a /neighbors report). Unrelated to UpsertObserverScope
+// above, which links an observer to a named transport_scopes row matched by
+// key fingerprint; this stores the raw OTA-configured scope string instead.
+func (s *Store) UpdateObserverRegionScope(ctx context.Context, observerID uuid.UUID, regionScope string) error {
+	return s.q.UpdateObserverRegionScope(ctx, sqlc.UpdateObserverRegionScopeParams{
+		ID:          observerID,
+		RegionScope: &regionScope,
 	})
 }
 

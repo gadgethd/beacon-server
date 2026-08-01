@@ -21,6 +21,18 @@
 //  1. Parse topic → extract publisher pubkey
 //  2. Upsert observers row (status_metadata, last_status_at, observer_type, etc.)
 //  3. Fan out observerStatus event to hub
+//
+// Pipeline per incoming /neighbors message (sent every 12-368h if mqtt.neighbors
+// is enabled on the observer):
+//  1. Parse topic → extract IATA + publisher pubkey
+//  2. Record the observer's own "self" region scope (always known, unconditional write)
+//  3. For each reported zero-hop neighbor: resolve both sides via GetNodeByPubkey
+//     (skip the entry if either the observer or the neighbor has no node row yet --
+//     i.e. hasn't advertised) and upsert a node_neighbors edge. Absence from the
+//     report means nothing (10KB message cap can truncate a highly-connected node's
+//     list), so this never deletes existing edges. A neighbor's region_scope is only
+//     written when status == "responded"; "timeout" (OTA scope queries are flaky)
+//     leaves any previously known scope untouched.
 package ingest
 
 import (
@@ -110,6 +122,10 @@ type DB interface {
 	// the observer's own node may not exist until it has advertised.
 	GetNodeByPubkey(ctx context.Context, pubkey []byte) (uuid.UUID, error)
 
+	// GetNodesByIDs returns resolved node details (name, pubkey, coords) for a set of node
+	// IDs. Used with GetNodeByPubkey to resolve an ADVERT's exact-match source endpoint.
+	GetNodesByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*api.ResolvedNode, error)
+
 	// UpsertNodeIATA upserts a node_iatas row.
 	UpsertNodeIATA(ctx context.Context, nodeID uuid.UUID, iata string) error
 
@@ -152,6 +168,16 @@ type DB interface {
 	// but can be safely ignored since unknown-key channels have no messages.
 	UpsertChannelHashOnly(ctx context.Context, channelHash []byte) (int, error)
 
+	// ListUndecryptedGroupTextPackets returns GRP_TXT packets never successfully decrypted --
+	// used by BackfillChannelMessages to retry them against the current keystore at boot.
+	ListUndecryptedGroupTextPackets(ctx context.Context) ([]UndecryptedPacket, error)
+
+	// UpsertChannelIATA upserts a channel_iatas row.
+	UpsertChannelIATA(ctx context.Context, channelHash []byte, iata string, heardAt time.Time) error
+
+	// UpsertTraceIATA upserts a trace_iatas row.
+	UpsertTraceIATA(ctx context.Context, traceTag []byte, iata string, heardAt time.Time) error
+
 	// GetPacketObservationCount returns the number of rows for the packet observations
 	GetPacketObservationCount(ctx context.Context, packetHash []byte) (int64, error)
 
@@ -169,7 +195,13 @@ type DB interface {
 	// UpsertNodeNeighbor records or updates a neighbor relationship between two nodes.
 	// nodeID is the advertising node, neighborID is the first-hop forwarder.
 	// snr is optional (nil when no signal reading is available, the common case).
-	UpsertNodeNeighbor(ctx context.Context, nodeID, neighborID uuid.UUID, iata string, snr *float32) error
+	// regionScope is optional (nil when there's no fresh OTA-queried scope to
+	// record for this neighbor, e.g. a /neighbors report entry with a failed query).
+	UpsertNodeNeighbor(ctx context.Context, nodeID, neighborID uuid.UUID, iata string, snr *float32, regionScope *string) error
+
+	// UpdateObserverRegionScope records the observer's own OTA-reported region
+	// scope, from the "self" field of a /neighbors report.
+	UpdateObserverRegionScope(ctx context.Context, observerID uuid.UUID, regionScope string) error
 }
 
 // ChannelKeyStore is a read-only view of the channel keys loaded from config.
@@ -268,6 +300,21 @@ func (w *Worker) subscribe(client mqtt.Client) {
 	}
 }
 
+// isValidIATA reports whether s is 3 uppercase ASCII letters, matching the
+// iata_codes.iata CHAR(3) column. MQTT topic segments are attacker/observer
+// controlled and must be validated before touching the DB.
+func isValidIATA(s string) bool {
+	if len(s) != 3 {
+		return false
+	}
+	for i := 0; i < 3; i++ {
+		if s[i] < 'A' || s[i] > 'Z' {
+			return false
+		}
+	}
+	return true
+}
+
 // handleMessage dispatches incoming MQTT messages by subtopic.
 // Each message is processed with a 30s timeout to prevent slow DB calls
 // from blocking the MQTT receive goroutine indefinitely.
@@ -278,6 +325,13 @@ func (w *Worker) handleMessage(msg mqtt.Message) {
 		return
 	}
 	iata, pubkeyHex, subtopic := parts[1], parts[2], parts[3]
+
+	// iata_codes.iata is CHAR(3); anything else would fail the DB insert
+	// downstream, so reject malformed topic segments here instead.
+	if !isValidIATA(iata) {
+		log.Printf("ingest[%s]: dropped packet with malformed IATA %q on topic %s", w.cfg.BrokerName, iata, msg.Topic())
+		return
+	}
 
 	// Drop packets from IATAs outside the configured geographic filter.
 	if w.cfg.AllowedIATAs != nil {
@@ -295,6 +349,8 @@ func (w *Worker) handleMessage(msg mqtt.Message) {
 		w.handlePacket(ctx, iata, pubkeyHex, msg.Payload())
 	case "status":
 		w.handleStatus(ctx, pubkeyHex, msg.Payload())
+	case "neighbors":
+		w.handleNeighbors(ctx, iata, pubkeyHex, msg.Payload())
 		// "internal" is intentionally not handled (Role 2 access)
 	}
 }

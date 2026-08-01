@@ -24,6 +24,18 @@ func ViewRefreshTask(store *db.Store, interval time.Duration) Task {
 			if err := store.RefreshTopNodes(ctx); err != nil {
 				log.Printf("background[view_refresh]: top nodes: %v", err)
 			}
+			if err := store.RefreshTopObservers(ctx); err != nil {
+				log.Printf("background[view_refresh]: top observers: %v", err)
+			}
+			if err := store.RefreshPayloadBreakdown(ctx); err != nil {
+				log.Printf("background[view_refresh]: payload breakdown: %v", err)
+			}
+			if err := store.RefreshTopTalkers(ctx); err != nil {
+				log.Printf("background[view_refresh]: top talkers: %v", err)
+			}
+			if err := store.RefreshTopAdvertisers(ctx); err != nil {
+				log.Printf("background[view_refresh]: top advertisers: %v", err)
+			}
 			if err := store.RefreshRadioPresets(ctx); err != nil {
 				log.Printf("background[view_refresh]: radio presets: %v", err)
 			}
@@ -32,8 +44,8 @@ func ViewRefreshTask(store *db.Store, interval time.Duration) Task {
 	}
 }
 
-// CleanupTask returns a Task that prunes old telemetry and packet rows.
-func CleanupTask(store *db.Store, telemetryRetention, packetRetention, interval time.Duration) Task {
+// CleanupTask returns a Task that prunes old telemetry, packet, and node rows.
+func CleanupTask(store *db.Store, telemetryRetention, packetRetention, nodeDeleteAfter, interval time.Duration) Task {
 	return Task{
 		Name:     "cleanup",
 		Interval: interval,
@@ -41,7 +53,19 @@ func CleanupTask(store *db.Store, telemetryRetention, packetRetention, interval 
 			if err := store.DeleteOldTelemetry(ctx, time.Now().Add(-telemetryRetention)); err != nil {
 				return err
 			}
-			if err := store.DeleteOldPackets(ctx, time.Now().Add(-packetRetention)); err != nil {
+			// One cutoff for all three so the IATA tables stay in step
+			// with the packets they mirror.
+			cutoff := time.Now().Add(-packetRetention)
+			if err := store.DeleteOldPackets(ctx, cutoff); err != nil {
+				return err
+			}
+			if err := store.DeleteOldChannelIATAs(ctx, cutoff); err != nil {
+				return err
+			}
+			if err := store.DeleteOldTraceIATAs(ctx, cutoff); err != nil {
+				return err
+			}
+			if err := store.DeleteOldNodes(ctx, time.Now().Add(-nodeDeleteAfter)); err != nil {
 				return err
 			}
 			return nil

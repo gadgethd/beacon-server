@@ -67,9 +67,51 @@ type TopObserver struct {
 	ObservationCount int64     `json:"observationCount"`
 }
 
+// TopAdvertiser is a node ranked by distinct ADVERT packet count within the requested
+// window. Count is per-advert, not per-hearing -- see GetStatsTopAdvertisers.
+type TopAdvertiser struct {
+	NodeID       uuid.UUID `json:"nodeId"`
+	NodeName     *string   `json:"nodeName,omitempty"`
+	NodeType     int16     `json:"nodeType"`
+	NodeTypeName string    `json:"nodeTypeName"`
+	IATA         string    `json:"iata"`
+	AdvertCount  int64     `json:"advertCount"`
+	// FloodAdvertCount/DirectAdvertCount split AdvertCount by how the advert was routed:
+	// flood = route type 0 (transport_flood) or 1 (flood), broadcast with no known path;
+	// direct = route type 2 (direct) or 3 (transport_direct), routed along a known path.
+	// FloodAdvertCount + DirectAdvertCount == AdvertCount.
+	FloodAdvertCount  int64 `json:"floodAdvertCount"`
+	DirectAdvertCount int64 `json:"directAdvertCount"`
+	LastHeard         int64 `json:"lastHeard"` // epoch ms
+}
+
+// TopTalker is a companion name ranked by decrypted channel message count within the
+// requested window. Grouped by sender name as decrypted from the message itself, not by
+// node identity -- see GetStatsTopTalkers.
+type TopTalker struct {
+	SenderName   string `json:"senderName"`
+	MessageCount int64  `json:"messageCount"`
+	LastSent     int64  `json:"lastSent"` // epoch ms
+}
+
 // NodeTypeCount shows the count of nodes of a given type with the type name
 type NodeTypeCount struct {
 	NodeType     int16  `json:"nodeType"`
 	NodeTypeName string `json:"nodeTypeName"`
 	Count        int64  `json:"count"`
+}
+
+// ClockDriftEntry is a repeater or room server whose most recent advert-derived clock drift
+// exceeds the configured threshold (nodes.clock_drift_threshold, default 5m) -- see
+// GetStatsClockDrift. Ordered worst-drift-first. ClockDriftSeconds/ClockCheckedAt mirror the
+// same-named fields on Node; unlike Node this list only ever contains out-of-sync nodes, so
+// there's no ClockOutOfSync bool here -- being in the list already means true.
+type ClockDriftEntry struct {
+	NodeID            uuid.UUID  `json:"nodeId"`
+	NodeName          *string    `json:"nodeName,omitempty"`
+	NodeType          int16      `json:"nodeType"`
+	NodeTypeName      string     `json:"nodeTypeName"`
+	ClockDriftSeconds int        `json:"clockDriftSeconds"` // signed; +ve = device ahead of server
+	ClockCheckedAt    int64      `json:"clockCheckedAt"`    // epoch ms
+	IATAs             []NodeIATA `json:"iatas,omitempty"`   // IATAs this node has been heard in
 }

@@ -17,6 +17,18 @@ type PacketLatestObserver struct {
 	ID          uuid.UUID `json:"id"`
 	DisplayName *string   `json:"displayName,omitempty"`
 	IATA        string    `json:"iata"`
+	// PathLength/PathBytes are cheap -- already-stored columns on packet_observations -- and
+	// populated everywhere PacketLatestObserver appears: the REST list/backfill endpoints and
+	// the WS feed alike. ResolvedPath/ResolvedSource/ResolvedDestination require a per-hash DB
+	// resolution lookup; they're populated on the WS feed (already computed once at ingest, so
+	// effectively free there) but deliberately left nil on the REST endpoints, which are
+	// paginated/high-volume and used only for scrollback and reconnect-gap backfill -- full
+	// resolution stays a GET /packets/{packetHash}-only feature.
+	PathLength          *PacketPathLength `json:"pathLength,omitempty"`
+	PathBytes           *string           `json:"pathBytes,omitempty"` // hex-encoded accumulated path hashes
+	ResolvedPath        []ResolvedHop     `json:"resolvedPath,omitempty"`
+	ResolvedSource      *ResolvedHop      `json:"resolvedSource,omitempty"`
+	ResolvedDestination *ResolvedHop      `json:"resolvedDestination,omitempty"`
 }
 
 // PacketSummary is the minimal packet representation used in list responses.
@@ -58,6 +70,14 @@ type PacketObservationDetail struct {
 	Radio             *PacketRadio     `json:"radio,omitempty"`
 	SourceBroker      string           `json:"sourceBroker"`
 	ResolvedPath      []ResolvedHop    `json:"resolvedPath"` // per-observation resolved path hashes
+	// ResolvedSource/ResolvedDestination are the packet's endpoints, when the payload type
+	// carries a resolvable one: an exact match for ADVERT's full pubkey, an ambiguous
+	// hash-prefix match (like intermediate hops) for TEXT_MESSAGE/PATH/ANON_REQ's 1-byte
+	// source/destination hashes. Nil when the payload type doesn't carry one at all (e.g.
+	// GRP_TXT/GRP_DATA/TRACE aren't node-to-node addressed) -- see BuildResolvedPath and
+	// ResolveExactNode for how each is built.
+	ResolvedSource      *ResolvedHop `json:"resolvedSource,omitempty"`
+	ResolvedDestination *ResolvedHop `json:"resolvedDestination,omitempty"`
 }
 
 // PacketRadio holds the radio settings copied from the observer at observation time.
@@ -277,4 +297,15 @@ func BuildResolvedPath(hashes [][]byte, resolved map[string][]ResolvedPathEntry)
 		path = append(path, hop)
 	}
 	return path
+}
+
+// ResolveExactNode builds a ResolvedHop for an endpoint resolved by an exact, unambiguous
+// key -- e.g. an ADVERT's full public key already resolved to a single node -- as opposed
+// to BuildResolvedPath's hash-prefix matching, which can be ambiguous. Confidence is always
+// "high" when a node was found, "none" when it wasn't (unknown node, or lookup failed).
+func ResolveExactNode(node *ResolvedNode) ResolvedHop {
+	if node == nil {
+		return ResolvedHop{Confidence: "none", Nodes: []ResolvedNode{}}
+	}
+	return ResolvedHop{Confidence: "high", Nodes: []ResolvedNode{*node}}
 }

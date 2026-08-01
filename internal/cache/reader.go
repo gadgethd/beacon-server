@@ -5,6 +5,7 @@ package cache
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -17,6 +18,7 @@ import (
 const (
 	keyIATAs                   = "beacon:iatas"
 	keyIATAPrefix              = "beacon:iata:"
+	keyIATABorderPrefix        = "beacon:iata:border:"
 	keyRegions                 = "beacon:regions"
 	keyRegionPrefix            = "beacon:region:"
 	keyRegionSlugPrefix        = "beacon:region:slug:"
@@ -29,6 +31,9 @@ const (
 	keyStatsBreakdownPrefix    = "beacon:stats:breakdown:"
 	keyStatsTopNodesPrefix     = "beacon:stats:top-nodes:"
 	keyStatsTopObsPrefix       = "beacon:stats:top-observers:"
+	keyStatsTopAdvPrefix       = "beacon:stats:top-advertisers:"
+	keyStatsClockDriftPrefix   = "beacon:stats:clock-drift:"
+	keyStatsTopTalkersPrefix   = "beacon:stats:top-talkers:"
 	keyStatsNodeTypes          = "beacon:stats:node-types:"
 	keyRadioPresetsPrefix      = "beacon:radio-presets:"
 	keyNodePrefix              = "beacon:node:"
@@ -93,6 +98,13 @@ func (cr *CachedReader) ListIATAs(ctx context.Context) ([]api.IATA, error) {
 func (cr *CachedReader) GetIATA(ctx context.Context, iata string) (*api.IATA, error) {
 	return getOrSet(ctx, cr.c, keyIATAPrefix+iata, cr.ttl.Reference, func() (*api.IATA, error) {
 		return cr.inner.GetIATA(ctx, iata)
+	})
+}
+
+// GetIATABorder implements [api.Reader].
+func (cr *CachedReader) GetIATABorder(ctx context.Context, iata string) (json.RawMessage, error) {
+	return getOrSet(ctx, cr.c, keyIATABorderPrefix+iata, cr.ttl.Reference, func() (json.RawMessage, error) {
+		return cr.inner.GetIATABorder(ctx, iata)
 	})
 }
 
@@ -233,6 +245,48 @@ func (cr *CachedReader) GetStatsTopObservers(ctx context.Context, iatas []string
 	})
 }
 
+// GetStatsTopAdvertisers implements [api.Reader].
+func (cr *CachedReader) GetStatsTopAdvertisers(ctx context.Context, iatas []string, since time.Time, limit int32) ([]api.TopAdvertiser, error) {
+	segment := "all"
+	if len(iatas) > 0 {
+		sorted := append([]string(nil), iatas...)
+		sort.Strings(sorted)
+		segment = strings.Join(sorted, ",")
+	}
+	key := fmt.Sprintf("%s%s:%d:%d", keyStatsTopAdvPrefix, segment, since.UnixMilli(), limit)
+	return getOrSet(ctx, cr.c, key, cr.ttl.Stats, func() ([]api.TopAdvertiser, error) {
+		return cr.inner.GetStatsTopAdvertisers(ctx, iatas, since, limit)
+	})
+}
+
+// GetStatsClockDrift implements [api.Reader].
+func (cr *CachedReader) GetStatsClockDrift(ctx context.Context, iatas []string, limit int32) ([]api.ClockDriftEntry, error) {
+	segment := "all"
+	if len(iatas) > 0 {
+		sorted := append([]string(nil), iatas...)
+		sort.Strings(sorted)
+		segment = strings.Join(sorted, ",")
+	}
+	key := fmt.Sprintf("%s%s:%d", keyStatsClockDriftPrefix, segment, limit)
+	return getOrSet(ctx, cr.c, key, cr.ttl.Stats, func() ([]api.ClockDriftEntry, error) {
+		return cr.inner.GetStatsClockDrift(ctx, iatas, limit)
+	})
+}
+
+// GetStatsTopTalkers implements [api.Reader].
+func (cr *CachedReader) GetStatsTopTalkers(ctx context.Context, iatas []string, since time.Time, limit int32) ([]api.TopTalker, error) {
+	segment := "all"
+	if len(iatas) > 0 {
+		sorted := append([]string(nil), iatas...)
+		sort.Strings(sorted)
+		segment = strings.Join(sorted, ",")
+	}
+	key := fmt.Sprintf("%s%s:%d:%d", keyStatsTopTalkersPrefix, segment, since.UnixMilli(), limit)
+	return getOrSet(ctx, cr.c, key, cr.ttl.Stats, func() ([]api.TopTalker, error) {
+		return cr.inner.GetStatsTopTalkers(ctx, iatas, since, limit)
+	})
+}
+
 // GetRadioPresets implements [api.Reader].
 func (cr *CachedReader) GetRadioPresets(ctx context.Context, preset string, iatas []string) ([]api.RadioPreset, error) {
 	segment := "all"
@@ -324,8 +378,8 @@ func (cr *CachedReader) GetCrossIATANeighbors(ctx context.Context, nodeID uuid.U
 }
 
 // ListChannels implements [api.Reader].
-func (cr *CachedReader) ListChannels(ctx context.Context, limit int32, hash []byte, iata string, cursor int64) (api.Page[api.ChannelSummary], error) {
-	return cr.inner.ListChannels(ctx, limit, hash, iata, cursor)
+func (cr *CachedReader) ListChannels(ctx context.Context, limit int32, hash []byte, iatas []string, cursor int64) (api.Page[api.ChannelSummary], error) {
+	return cr.inner.ListChannels(ctx, limit, hash, iatas, cursor)
 }
 
 // ListChannelMessages implements [api.Reader].
@@ -344,8 +398,8 @@ func (cr *CachedReader) ListMessagesAfterID(ctx context.Context, afterID int64, 
 }
 
 // ListNodes implements [api.Reader].
-func (cr *CachedReader) ListNodes(ctx context.Context, nodeType int16, iatas []string, supportsMultibytePaths, supportsMultibyteTraces *bool, pubkey []byte, name, scope string, cursor int64, limit int32, includeNeighbors bool) (api.Page[api.NodeSummary], error) {
-	return cr.inner.ListNodes(ctx, nodeType, iatas, supportsMultibytePaths, supportsMultibyteTraces, pubkey, name, scope, cursor, limit, includeNeighbors)
+func (cr *CachedReader) ListNodes(ctx context.Context, nodeType int16, iatas []string, supportsMultibytePaths, supportsMultibyteTraces *bool, pubkey []byte, pubkeyPrefix, name, scope string, cursor int64, limit int32, includeNeighbors bool) (api.Page[api.NodeSummary], error) {
+	return cr.inner.ListNodes(ctx, nodeType, iatas, supportsMultibytePaths, supportsMultibyteTraces, pubkey, pubkeyPrefix, name, scope, cursor, limit, includeNeighbors)
 }
 
 // ListNodeObservations implements [api.Reader].
@@ -364,8 +418,8 @@ func (cr *CachedReader) ListObserverAdverts(ctx context.Context, observerID uuid
 }
 
 // ListPackets implements [api.Reader].
-func (cr *CachedReader) ListPackets(ctx context.Context, payloadType, routeType int16, iatas []string, scope string, since, until time.Time, cursor int64, limit int32) (api.Page[api.PacketSummary], error) {
-	return cr.inner.ListPackets(ctx, payloadType, routeType, iatas, scope, since, until, cursor, limit)
+func (cr *CachedReader) ListPackets(ctx context.Context, payloadTypes, routeTypes []int16, iatas []string, scopes []string, since, until time.Time, cursor int64, limit int32) (api.Page[api.PacketSummary], error) {
+	return cr.inner.ListPackets(ctx, payloadTypes, routeTypes, iatas, scopes, since, until, cursor, limit)
 }
 
 // ListPacketsAfterID implements [api.Reader].

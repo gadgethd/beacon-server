@@ -5,7 +5,8 @@ package db
 
 import (
 	"context"
-	"strings"
+	"encoding/json"
+	"log"
 	"time"
 
 	sqlc "github.com/MeshCore-Beacon/beacon-server/db/sqlc"
@@ -14,7 +15,7 @@ import (
 )
 
 func (s *Store) GetStatsOverview(ctx context.Context, iatas []string) (*api.StatsOverview, error) {
-	row, err := s.q.GetStatsOverview(ctx, strings.Join(iatas, ","))
+	row, err := s.q.GetStatsOverview(ctx, iatas)
 	if err != nil {
 		return nil, err
 	}
@@ -33,7 +34,7 @@ func (s *Store) GetStatsObservations(ctx context.Context, iatas []string, since 
 	}
 	interval := time.Since(since)
 	rows, err := s.q.GetHourlyStats(ctx, sqlc.GetHourlyStatsParams{
-		Column1: strings.Join(iatas, ","),
+		Column1: iatas,
 		Column2: pgtype.Interval{Microseconds: int64(interval.Hours()) * 3600 * 1e6, Valid: true},
 	})
 	if err != nil {
@@ -56,18 +57,22 @@ func (s *Store) GetStatsPayloadBreakdown(ctx context.Context, iatas []string, si
 	if since.IsZero() {
 		since = time.Now().Add(-24 * time.Hour)
 	}
+	interval := time.Since(since)
 	rows, err := s.q.GetStatsPayloadBreakdown(ctx, sqlc.GetStatsPayloadBreakdownParams{
-		HeardAt: pgtype.Timestamptz{Time: since, Valid: true},
-		Column2: strings.Join(iatas, ","),
+		Column1: iatas,
+		Column2: pgtype.Interval{Microseconds: int64(interval.Hours()) * 3600 * 1e6, Valid: true},
 	})
 	if err != nil {
 		return nil, err
 	}
 	items := make([]api.PayloadBreakdownItem, 0, len(rows))
 	for _, v := range rows {
+		if v.PayloadType == nil {
+			continue
+		}
 		items = append(items, api.PayloadBreakdownItem{
-			PayloadType:     v.PayloadType,
-			PayloadTypeName: api.PayloadTypeName(v.PayloadType),
+			PayloadType:     *v.PayloadType,
+			PayloadTypeName: api.PayloadTypeName(*v.PayloadType),
 			Count:           v.Count,
 		})
 	}
@@ -76,7 +81,7 @@ func (s *Store) GetStatsPayloadBreakdown(ctx context.Context, iatas []string, si
 
 func (s *Store) GetStatsTopNodes(ctx context.Context, iatas []string, limit int32) ([]api.TopNode, error) {
 	rows, err := s.q.GetTopNodes(ctx, sqlc.GetTopNodesParams{
-		Column1: strings.Join(iatas, ","),
+		Column1: iatas,
 		Limit:   limit,
 	})
 	if err != nil {
@@ -105,9 +110,10 @@ func (s *Store) GetStatsTopObservers(ctx context.Context, iatas []string, since 
 	if since.IsZero() {
 		since = time.Now().Add(-24 * time.Hour)
 	}
+	interval := time.Since(since)
 	rows, err := s.q.GetStatsTopObservers(ctx, sqlc.GetStatsTopObserversParams{
-		HeardAt: pgtype.Timestamptz{Time: since, Valid: true},
-		Column2: strings.Join(iatas, ","),
+		Column1: pgtype.Interval{Microseconds: int64(interval.Hours()) * 3600 * 1e6, Valid: true},
+		Column2: iatas,
 		Limit:   limit,
 	})
 	if err != nil {
@@ -115,13 +121,103 @@ func (s *Store) GetStatsTopObservers(ctx context.Context, iatas []string, since 
 	}
 	items := make([]api.TopObserver, 0, len(rows))
 	for _, v := range rows {
-		iata, _ := v.Iata.(string)
 		items = append(items, api.TopObserver{
 			ObserverID:       v.ID,
 			DisplayName:      v.DisplayName,
 			ObserverType:     v.ObserverType,
-			IATA:             iata,
+			IATA:             v.Iata,
 			ObservationCount: v.ObservationCount,
+		})
+	}
+	return items, nil
+}
+
+func (s *Store) GetStatsTopAdvertisers(ctx context.Context, iatas []string, since time.Time, limit int32) ([]api.TopAdvertiser, error) {
+	if since.IsZero() {
+		since = time.Now().Add(-24 * time.Hour)
+	}
+	interval := time.Since(since)
+	rows, err := s.q.GetStatsTopAdvertisers(ctx, sqlc.GetStatsTopAdvertisersParams{
+		Column1: pgtype.Interval{Microseconds: int64(interval.Hours()) * 3600 * 1e6, Valid: true},
+		Column2: iatas,
+		Limit:   limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	items := make([]api.TopAdvertiser, 0, len(rows))
+	for _, v := range rows {
+		items = append(items, api.TopAdvertiser{
+			NodeID:            v.ID,
+			NodeName:          v.Name,
+			NodeType:          v.NodeType,
+			NodeTypeName:      api.NodeTypeName(v.NodeType),
+			IATA:              v.Iata,
+			AdvertCount:       v.AdvertCount,
+			FloodAdvertCount:  v.FloodAdvertCount,
+			DirectAdvertCount: v.DirectAdvertCount,
+			LastHeard:         v.LastHeard.Time.UnixMilli(),
+		})
+	}
+	return items, nil
+}
+
+// GetStatsClockDrift returns repeaters/room servers whose current advert-derived clock
+// drift exceeds the Store's configured threshold, worst first.
+func (s *Store) GetStatsClockDrift(ctx context.Context, iatas []string, limit int32) ([]api.ClockDriftEntry, error) {
+	thresholdSeconds := int32(s.clockDriftThreshold / time.Second)
+	rows, err := s.q.GetStatsClockDrift(ctx, sqlc.GetStatsClockDriftParams{
+		Column1: thresholdSeconds,
+		Column2: iatas,
+		Limit:   limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	items := make([]api.ClockDriftEntry, 0, len(rows))
+	for _, v := range rows {
+		entry := api.ClockDriftEntry{
+			NodeID:            v.ID,
+			NodeName:          v.Name,
+			NodeType:          v.NodeType,
+			NodeTypeName:      api.NodeTypeName(v.NodeType),
+			ClockDriftSeconds: int(*v.DeviceClockDriftSeconds),
+			ClockCheckedAt:    v.LastAdvertAt.Time.UnixMilli(),
+		}
+		if len(v.Iatas) > 0 {
+			if err := json.Unmarshal(v.Iatas, &entry.IATAs); err != nil {
+				log.Printf("store: failed to unmarshal clock drift node iatas: %v", err)
+				entry.IATAs = []api.NodeIATA{}
+			}
+		}
+		items = append(items, entry)
+	}
+	return items, nil
+}
+
+func (s *Store) GetStatsTopTalkers(ctx context.Context, iatas []string, since time.Time, limit int32) ([]api.TopTalker, error) {
+	if since.IsZero() {
+		since = time.Now().Add(-24 * time.Hour)
+	}
+	interval := time.Since(since)
+	rows, err := s.q.GetStatsTopTalkers(ctx, sqlc.GetStatsTopTalkersParams{
+		Column1: pgtype.Interval{Microseconds: int64(interval.Hours()) * 3600 * 1e6, Valid: true},
+		Column2: iatas,
+		Limit:   limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	items := make([]api.TopTalker, 0, len(rows))
+	for _, v := range rows {
+		var senderName string
+		if v.SenderName != nil {
+			senderName = *v.SenderName
+		}
+		items = append(items, api.TopTalker{
+			SenderName:   senderName,
+			MessageCount: v.MessageCount,
+			LastSent:     v.LastSent.Time.UnixMilli(),
 		})
 	}
 	return items, nil
@@ -130,7 +226,7 @@ func (s *Store) GetStatsTopObservers(ctx context.Context, iatas []string, since 
 func (s *Store) GetRadioPresets(ctx context.Context, preset string, iatas []string) ([]api.RadioPreset, error) {
 	rows, err := s.q.GetRadioPresets(ctx, sqlc.GetRadioPresetsParams{
 		Column1: preset,
-		Column2: strings.Join(iatas, ","),
+		Column2: iatas,
 	})
 	if err != nil {
 		return nil, err
@@ -165,7 +261,7 @@ func (s *Store) GetScopeStats(ctx context.Context) ([]api.ScopeStats, error) {
 }
 
 func (s *Store) GetStatsNodeTypes(ctx context.Context, iatas []string) ([]api.NodeTypeCount, error) {
-	rows, err := s.q.GetStatsNodeTypes(ctx, strings.Join(iatas, ","))
+	rows, err := s.q.GetStatsNodeTypes(ctx, iatas)
 	if err != nil {
 		return nil, err
 	}
@@ -186,6 +282,22 @@ func (s *Store) RefreshHourlyStats(ctx context.Context) error {
 
 func (s *Store) RefreshTopNodes(ctx context.Context) error {
 	return s.q.RefreshTopNodes(ctx)
+}
+
+func (s *Store) RefreshPayloadBreakdown(ctx context.Context) error {
+	return s.q.RefreshPayloadBreakdown(ctx)
+}
+
+func (s *Store) RefreshTopTalkers(ctx context.Context) error {
+	return s.q.RefreshTopTalkers(ctx)
+}
+
+func (s *Store) RefreshTopAdvertisers(ctx context.Context) error {
+	return s.q.RefreshTopAdvertisers(ctx)
+}
+
+func (s *Store) RefreshTopObservers(ctx context.Context) error {
+	return s.q.RefreshTopObservers(ctx)
 }
 
 func (s *Store) RefreshRadioPresets(ctx context.Context) error {

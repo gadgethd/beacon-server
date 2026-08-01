@@ -23,6 +23,12 @@ type Channel struct {
 	MessageCount   *int64             `json:"message_count"`
 }
 
+type ChannelIata struct {
+	ChannelHash []byte             `json:"channel_hash"`
+	Iata        string             `json:"iata"`
+	LastHeard   pgtype.Timestamptz `json:"last_heard"`
+}
+
 type ChannelKey struct {
 	ChannelID      int32              `json:"channel_id"`
 	KeyBytes       []byte             `json:"key_bytes"`
@@ -47,6 +53,7 @@ type IataCode struct {
 	ApproxLat   *float64           `json:"approx_lat"`
 	ApproxLng   *float64           `json:"approx_lng"`
 	AddedAt     pgtype.Timestamptz `json:"added_at"`
+	Border      []byte             `json:"border"`
 }
 
 type KnownRoute struct {
@@ -68,11 +75,30 @@ type MvHourlyIataStat struct {
 	ActiveObservers  int64              `json:"active_observers"`
 }
 
+type MvPayloadBreakdownByIatum struct {
+	Iata        string             `json:"iata"`
+	PayloadType *int16             `json:"payload_type"`
+	Bucket      pgtype.Timestamptz `json:"bucket"`
+	Count       int64              `json:"count"`
+}
+
 type MvRadioPreset struct {
 	Preset     string `json:"preset"`
 	Iata       string `json:"iata"`
 	SourceType string `json:"source_type"`
 	Count      int64  `json:"count"`
+}
+
+type MvTopAdvertisersByIatum struct {
+	Iata              string             `json:"iata"`
+	NodeID            uuid.UUID          `json:"node_id"`
+	Name              *string            `json:"name"`
+	NodeType          int16              `json:"node_type"`
+	Bucket            pgtype.Timestamptz `json:"bucket"`
+	AdvertCount       int64              `json:"advert_count"`
+	FloodAdvertCount  int64              `json:"flood_advert_count"`
+	DirectAdvertCount int64              `json:"direct_advert_count"`
+	LastHeard         interface{}        `json:"last_heard"`
 }
 
 type MvTopNodesByIatum struct {
@@ -82,6 +108,23 @@ type MvTopNodesByIatum struct {
 	NodeType         int16              `json:"node_type"`
 	ObservationCount *int64             `json:"observation_count"`
 	LastHeard        pgtype.Timestamptz `json:"last_heard"`
+}
+
+type MvTopObserversByIatum struct {
+	Iata             string             `json:"iata"`
+	ObserverID       uuid.UUID          `json:"observer_id"`
+	DisplayName      *string            `json:"display_name"`
+	ObserverType     *string            `json:"observer_type"`
+	Bucket           pgtype.Timestamptz `json:"bucket"`
+	ObservationCount int64              `json:"observation_count"`
+}
+
+type MvTopTalkersByIatum struct {
+	Iata         string             `json:"iata"`
+	SenderName   *string            `json:"sender_name"`
+	Bucket       pgtype.Timestamptz `json:"bucket"`
+	MessageCount int64              `json:"message_count"`
+	LastSent     interface{}        `json:"last_sent"`
 }
 
 type Node struct {
@@ -103,6 +146,7 @@ type Node struct {
 	RadioSf                 *int16             `json:"radio_sf"`
 	RadioBwKhz              *float32           `json:"radio_bw_khz"`
 	Metadata                []byte             `json:"metadata"`
+	DeviceClockDriftSeconds *int32             `json:"device_clock_drift_seconds"`
 }
 
 type NodeIata struct {
@@ -121,6 +165,7 @@ type NodeNeighbor struct {
 	LastSeen         pgtype.Timestamptz `json:"last_seen"`
 	ObservationCount int64              `json:"observation_count"`
 	Snr              *float32           `json:"snr"`
+	RegionScope      *string            `json:"region_scope"`
 }
 
 type NodeShortID struct {
@@ -153,6 +198,7 @@ type Observer struct {
 	LastSeen         pgtype.Timestamptz `json:"last_seen"`
 	ObservationCount *int64             `json:"observation_count"`
 	Metadata         []byte             `json:"metadata"`
+	RegionScope      *string            `json:"region_scope"`
 }
 
 type ObserverBroker struct {
@@ -243,6 +289,7 @@ type PacketObservation struct {
 	BandwidthKhz      *float32           `json:"bandwidth_khz"`
 	CodingRate        *int16             `json:"coding_rate"`
 	SourceBroker      *string            `json:"source_broker"`
+	PayloadType       *int16             `json:"payload_type"`
 }
 
 type Region struct {
@@ -262,6 +309,12 @@ type RegionIata struct {
 	RegionID int32              `json:"region_id"`
 	Iata     string             `json:"iata"`
 	AddedAt  pgtype.Timestamptz `json:"added_at"`
+}
+
+type TraceIata struct {
+	TraceTag  []byte             `json:"trace_tag"`
+	Iata      string             `json:"iata"`
+	LastHeard pgtype.Timestamptz `json:"last_heard"`
 }
 
 type TransportScope struct {

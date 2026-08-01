@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
-	"strings"
 	"time"
 
 	sqlc "github.com/MeshCore-Beacon/beacon-server/db/sqlc"
@@ -48,16 +47,46 @@ func (s *Store) UpsertChannelHashOnly(ctx context.Context, channelHash []byte) (
 	return int(rowID), nil
 }
 
-func (s *Store) ListChannels(ctx context.Context, limit int32, hash []byte, iata string, cursor int64) (api.Page[api.ChannelSummary], error) {
+// ListUndecryptedGroupTextPackets returns GRP_TXT packets never successfully decrypted --
+// see internal/ingest.BackfillChannelMessages, which retries these against the current
+// keystore at boot.
+func (s *Store) ListUndecryptedGroupTextPackets(ctx context.Context) ([]ingest.UndecryptedPacket, error) {
+	rows, err := s.q.ListUndecryptedGroupTextPackets(ctx)
+	if err != nil {
+		return nil, err
+	}
+	packets := make([]ingest.UndecryptedPacket, 0, len(rows))
+	for _, v := range rows {
+		packets = append(packets, ingest.UndecryptedPacket{
+			PacketHash: v.PacketHash,
+			RawPayload: v.RawPayload,
+		})
+	}
+	return packets, nil
+}
+
+func (s *Store) UpsertChannelIATA(ctx context.Context, channelHash []byte, iata string, heardAt time.Time) error {
+	return s.q.UpsertChannelIATA(ctx, sqlc.UpsertChannelIATAParams{
+		ChannelHash: channelHash,
+		Iata:        iata,
+		LastHeard:   pgtype.Timestamptz{Time: heardAt, Valid: true},
+	})
+}
+
+func (s *Store) DeleteOldChannelIATAs(ctx context.Context, cutoff time.Time) error {
+	return s.q.DeleteOldChannelIATAs(ctx, pgtype.Timestamptz{Time: cutoff, Valid: true})
+}
+
+func (s *Store) ListChannels(ctx context.Context, limit int32, hash []byte, iatas []string, cursor int64) (api.Page[api.ChannelSummary], error) {
 	var cursorTS pgtype.Timestamptz
 	if cursor > 0 {
 		cursorTS = pgtype.Timestamptz{Time: time.UnixMilli(cursor), Valid: true}
 	}
 	rows, err := s.q.ListChannels(ctx, sqlc.ListChannelsParams{
-		Column1: hash,
-		Column2: iata,
-		Column3: cursorTS,
-		Limit:   limit + 1,
+		ChannelHash: hash,
+		Iatas:       iatas,
+		CursorTs:    cursorTS,
+		PageLimit:   limit + 1,
 	})
 	if err != nil {
 		return api.Page[api.ChannelSummary]{}, err
@@ -132,11 +161,10 @@ func (s *Store) ListChannelMessages(ctx context.Context, channelID *int32, since
 	ts := pgtype.Timestamptz{Time: since, Valid: !since.IsZero()}
 	var messages []api.ChannelMessage
 	var hasMore bool
-	iataFilter := strings.Join(iatas, ",")
 	if channelID == nil {
 		rows, err := s.q.ListAllChannelMessages(ctx, sqlc.ListAllChannelMessagesParams{
 			Column1: ts,
-			Column2: iataFilter,
+			Column2: iatas,
 			Column3: scope,
 			Column4: cursor,
 			Limit:   limit + 1,
@@ -156,7 +184,7 @@ func (s *Store) ListChannelMessages(ctx context.Context, channelID *int32, since
 		rows, err := s.q.ListChannelMessages(ctx, sqlc.ListChannelMessagesParams{
 			ChannelID: *channelID,
 			Column2:   ts,
-			Column3:   iataFilter,
+			Column3:   iatas,
 			Column4:   scope,
 			Column5:   cursor,
 			Limit:     limit + 1,
@@ -187,11 +215,10 @@ func (s *Store) ListChannelMessages(ctx context.Context, channelID *int32, since
 }
 
 func (s *Store) ListChannelMessagesByHash(ctx context.Context, hash []byte, since time.Time, limit int32, iatas []string, scope string, cursor int64) (api.Page[api.ChannelMessage], error) {
-	iataFilter := strings.Join(iatas, ",")
 	rows, err := s.q.ListChannelMessagesByHash(ctx, sqlc.ListChannelMessagesByHashParams{
 		ChannelHash: hash,
 		Column2:     pgtype.Timestamptz{Time: since, Valid: !since.IsZero()},
-		Column3:     iataFilter,
+		Column3:     iatas,
 		Column4:     scope,
 		Column5:     cursor,
 		Limit:       limit + 1,
@@ -220,10 +247,9 @@ func (s *Store) ListChannelMessagesByHash(ctx context.Context, hash []byte, sinc
 }
 
 func (s *Store) ListMessagesAfterID(ctx context.Context, afterID int64, iatas []string, scope string, limit int32) ([]api.ChannelMessage, error) {
-	iataFilter := strings.Join(iatas, ",")
 	rows, err := s.q.ListMessagesAfterID(ctx, sqlc.ListMessagesAfterIDParams{
 		ID:      afterID,
-		Column2: iataFilter,
+		Column2: iatas,
 		Column3: scope,
 		Limit:   limit,
 	})

@@ -13,7 +13,6 @@ import (
 
 	"github.com/MeshCore-Beacon/beacon-server/internal/api"
 	"github.com/MeshCore-Beacon/beacon-server/internal/hub"
-	"github.com/MeshCore-Beacon/beacon-server/internal/keystore"
 	"github.com/meshcore-go/meshcore-go"
 )
 
@@ -24,6 +23,10 @@ type UpsertNodeParams struct {
 	NodeType  uint8 // 1=companion, 2=repeater, 3=room server
 	Latitude  *float64
 	Longitude *float64
+	// AdvertTimestamp is the device's self-reported wall-clock time (epoch seconds) from the
+	// signed advert body. Used to derive clock drift for repeaters/room servers; see
+	// api.Node.ClockDriftSeconds.
+	AdvertTimestamp uint32
 }
 
 // InsertChannelMessageParams carries a decrypted group text message.
@@ -84,11 +87,12 @@ func (w *Worker) handlePayloadTypeSideEffects(ctx context.Context, packet *meshc
 			lon = &lo
 		}
 		params := UpsertNodeParams{
-			PublicKey: advert.PublicKey.PublicKeyBytes(),
-			Name:      strings.ToValidUTF8(advert.AppData().Name, "\uFFFD"),
-			NodeType:  advert.Type(),
-			Latitude:  lat,
-			Longitude: lon,
+			PublicKey:       advert.PublicKey.PublicKeyBytes(),
+			Name:            strings.ToValidUTF8(advert.AppData().Name, "\uFFFD"),
+			NodeType:        advert.Type(),
+			Latitude:        lat,
+			Longitude:       lon,
+			AdvertTimestamp: advert.Timestamp,
 		}
 		var nodeRadio RadioSettings
 		if packet.PathHashCount() == 0 {
@@ -122,7 +126,7 @@ func (w *Worker) handlePayloadTypeSideEffects(ctx context.Context, packet *meshc
 				if err == nil {
 					key := hex.EncodeToString(firstHop[0])
 					if entries := resolved[key]; len(entries) == 1 {
-						if err := w.db.UpsertNodeNeighbor(ctx, nodeID, entries[0].NodeID, iata, nil); err != nil {
+						if err := w.db.UpsertNodeNeighbor(ctx, nodeID, entries[0].NodeID, iata, nil, nil); err != nil {
 							log.Printf("ingest[%s]: failed to upsert node neighbor: %v", w.cfg.BrokerName, err)
 						}
 					}
@@ -137,7 +141,7 @@ func (w *Worker) handlePayloadTypeSideEffects(ctx context.Context, packet *meshc
 			observerNodeID, oErr := w.db.GetNodeByPubkey(ctx, observerPubkey)
 			if oErr == nil && observerNodeID != nodeID {
 				snr := rxSNR
-				if err := w.db.UpsertNodeNeighbor(ctx, observerNodeID, nodeID, iata, &snr); err != nil {
+				if err := w.db.UpsertNodeNeighbor(ctx, observerNodeID, nodeID, iata, &snr, nil); err != nil {
 					log.Printf("ingest[%s]: failed to upsert observer-advert neighbor: %v", w.cfg.BrokerName, err)
 				}
 			}
@@ -162,7 +166,7 @@ func (w *Worker) handlePayloadTypeSideEffects(ctx context.Context, packet *meshc
 		}
 		var radioStr *string
 		if radio.FreqMHz != 0 {
-			s := fmt.Sprintf("%.1f,%g,%d", radio.FreqMHz, radio.BWKHz, radio.SF)
+			s := fmt.Sprintf("%g,%g,%d", radio.FreqMHz, radio.BWKHz, radio.SF)
 			radioStr = &s
 		}
 		advertName := advert.AppData().Name
@@ -195,60 +199,28 @@ func (w *Worker) handlePayloadTypeSideEffects(ctx context.Context, packet *meshc
 		}
 		channelHashBytes := []byte{grpTxt.ChannelHash}
 
-		// Try each known key entry for this hash.
-		entries := w.keys.GetKey(channelHashBytes)
-		if len(entries) == 0 {
-			// channel key unknown; record a hash-only row and store the
-			// message as an encrypted blob only.
-			_, _ = w.db.UpsertChannelHashOnly(ctx, channelHashBytes)
+		result, err := DecryptGroupText(ctx, w.db, w.keys, packetHash, packet.Payload)
+		if err != nil {
+			log.Printf("ingest[%s]: decrypt group text failed: %v", w.cfg.BrokerName, err)
 			return
 		}
-		var payload *meshcore.GroupTextPayload
-		var usedEntry keystore.Entry
-		for _, entry := range entries {
-			if p, err := grpTxt.DecryptStruct(entry.Key); err == nil {
-				payload = p
-				usedEntry = entry
-				break
-			}
-		}
-		if payload == nil {
-			// none of the known keys worked for this hash; record a
-			// hash-only row so the channel is still visible.
+		if result == nil {
+			// none of the known keys worked for this hash (or none are known at all);
+			// record a hash-only row so the channel is still visible. If a matching key
+			// gets added to the config later, BackfillChannelMessages retries this packet
+			// at the next boot.
 			_, _ = w.db.UpsertChannelHashOnly(ctx, channelHashBytes)
 			return
 		}
 
-		// Upsert the keyed channel row — messages are associated with this row.
-		channelID, err := w.db.UpsertChannel(ctx, channelHashBytes, usedEntry.Fingerprint, usedEntry.Name, usedEntry.Hashtag)
-		if err != nil {
-			log.Printf("ingest[%s]: db: upsert keyed channel failed: %v", w.cfg.BrokerName, err)
-			return
-		}
-		params := InsertChannelMessageParams{
-			ChannelID:  channelID,
-			PacketHash: packetHash[:],
-			SenderName: strings.ReplaceAll(strings.ToValidUTF8(payload.Sender, "\uFFFD"), "\x00", ""),
-			SentAt:     time.Unix(int64(payload.Timestamp), 0),
-			Content:    strings.ReplaceAll(strings.ToValidUTF8(payload.Text, "\uFFFD"), "\x00", ""),
-		}
-		newMsg, err := w.db.InsertChannelMessage(ctx, params)
-		if err != nil {
-			log.Printf("ingest[%s]: db: insert channel message failed: %v", w.cfg.BrokerName, err)
-			return
-		}
-
-		if newMsg {
-			if err := w.db.SetPacketDecrypted(ctx, packetHash[:]); err != nil {
-				log.Printf("ingest[%s]: failed to set packet decrypted: %v", w.cfg.BrokerName, err)
-			}
+		if result.NewMessage {
 			evt := channelMessageEvent{
-				ChannelID:   channelID,
+				ChannelID:   result.ChannelID,
 				ChannelHash: hex.EncodeToString(channelHashBytes),
 				PacketHash:  hex.EncodeToString(packetHash),
-				SenderName:  strings.ReplaceAll(strings.ToValidUTF8(payload.Sender, "\uFFFD"), "\x00", ""),
-				Content:     strings.ReplaceAll(strings.ToValidUTF8(payload.Text, "\uFFFD"), "\x00", ""),
-				SentAt:      time.Unix(int64(payload.Timestamp), 0).UnixMilli(),
+				SenderName:  strings.ReplaceAll(strings.ToValidUTF8(result.Payload.Sender, "\uFFFD"), "\x00", ""),
+				Content:     strings.ReplaceAll(strings.ToValidUTF8(result.Payload.Text, "\uFFFD"), "\x00", ""),
+				SentAt:      time.Unix(int64(result.Payload.Timestamp), 0).UnixMilli(),
 			}
 			w.broadcast(hub.EventChannelMessage, iata, 0, fmt.Sprintf("%02x", grpTxt.ChannelHash), evt)
 		}

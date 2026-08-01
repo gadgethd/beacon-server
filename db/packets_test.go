@@ -80,7 +80,7 @@ func TestListPackets_Pagination(t *testing.T) {
 		Return(rows, nil)
 
 	store := &Store{q: mock}
-	page, err := store.ListPackets(context.Background(), 0, 0, nil, "", time.Time{}, time.Time{}, 0, 2)
+	page, err := store.ListPackets(context.Background(), nil, nil, nil, nil, time.Time{}, time.Time{}, 0, 2)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestListPackets_LatestObserverNil(t *testing.T) {
 		}, nil)
 
 	store := &Store{q: mock}
-	page, err := store.ListPackets(context.Background(), 0, 0, nil, "", time.Time{}, time.Time{}, 0, 10)
+	page, err := store.ListPackets(context.Background(), nil, nil, nil, nil, time.Time{}, time.Time{}, 0, 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestListPackets_LatestObserverSet(t *testing.T) {
 		}, nil)
 
 	store := &Store{q: mock}
-	page, err := store.ListPackets(context.Background(), 0, 0, nil, "", time.Time{}, time.Time{}, 0, 10)
+	page, err := store.ListPackets(context.Background(), nil, nil, nil, nil, time.Time{}, time.Time{}, 0, 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -154,6 +154,59 @@ func TestListPackets_LatestObserverSet(t *testing.T) {
 	}
 	if page.Items[0].LatestObserver.IATA != "" && page.Items[0].LatestObserver.IATA != "YVR" {
 		t.Errorf("expected IATA YVR, got %v", page.Items[0].LatestObserver.IATA)
+	}
+}
+
+func TestListPackets_LatestObserverPathFields(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	mock := mockdb.NewMockQuerier(ctrl)
+
+	heardAt := pgtype.Timestamptz{Time: time.UnixMilli(1700000000000), Valid: true}
+	observerID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
+	pathLengthByte := int16(0x42)
+	hashSize := int16(1)
+	hopCount := int16(2)
+	pathBytes := []byte{0xa1, 0xb2}
+
+	mock.EXPECT().
+		ListPackets(gomock.Any(), gomock.Any()).
+		Return([]sqlc.ListPacketsRow{
+			{
+				PacketHash:                   []byte{0xde, 0xad},
+				FirstHeardAt:                 heardAt,
+				LastHeardAt:                  heardAt,
+				LatestObserverID:             observerID,
+				LatestObserverPathLengthByte: pathLengthByte,
+				LatestObserverHashSize:       hashSize,
+				LatestObserverHopCount:       hopCount,
+				LatestObserverPathBytes:      pathBytes,
+			},
+		}, nil)
+
+	store := &Store{q: mock}
+	page, err := store.ListPackets(context.Background(), nil, nil, nil, nil, time.Time{}, time.Time{}, 0, 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	obs := page.Items[0].LatestObserver
+	if obs == nil {
+		t.Fatal("expected LatestObserver to be set")
+	}
+	if obs.PathLength == nil {
+		t.Fatal("expected PathLength to be set")
+	}
+	if obs.PathLength.HashSize != 1 || obs.PathLength.HopCount != 2 {
+		t.Errorf("expected hashSize=1 hopCount=2, got hashSize=%d hopCount=%d", obs.PathLength.HashSize, obs.PathLength.HopCount)
+	}
+	if obs.PathLength.Raw != "42" {
+		t.Errorf("expected raw 42, got %s", obs.PathLength.Raw)
+	}
+	if obs.PathBytes == nil || *obs.PathBytes != "a1b2" {
+		t.Errorf("expected pathBytes a1b2, got %v", obs.PathBytes)
+	}
+	// Resolution stays a detail-view-only feature on this list endpoint -- deliberately unset.
+	if obs.ResolvedPath != nil || obs.ResolvedSource != nil || obs.ResolvedDestination != nil {
+		t.Error("expected no resolved path/source/destination on the list endpoint")
 	}
 }
 
@@ -330,6 +383,67 @@ func TestGetPacket_FirstToLastMs(t *testing.T) {
 	}
 }
 
+func TestListPacketsAfterID_PassesIATAsAsArray(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	mock := mockdb.NewMockQuerier(ctrl)
+
+	mock.EXPECT().
+		ListPacketsAfterID(gomock.Any(), sqlc.ListPacketsAfterIDParams{
+			ID:      0,
+			Column2: int16(-1),
+			Column3: int16(-1),
+			Column4: []string{"ALF", "YYZ"},
+			Column5: "",
+			Limit:   50,
+		}).
+		Return([]sqlc.ListPacketsAfterIDRow{}, nil)
+
+	store := &Store{q: mock}
+	_, err := store.ListPacketsAfterID(context.Background(), 0, -1, -1, []string{"ALF", "YYZ"}, "", 50)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestListPacketsAfterID_LatestObserverPathFields(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	mock := mockdb.NewMockQuerier(ctrl)
+
+	heardAt := pgtype.Timestamptz{Time: time.UnixMilli(1700000000000), Valid: true}
+	observerID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
+
+	mock.EXPECT().
+		ListPacketsAfterID(gomock.Any(), gomock.Any()).
+		Return([]sqlc.ListPacketsAfterIDRow{
+			{
+				PacketHash:                   []byte{0xde, 0xad},
+				FirstHeardAt:                 heardAt,
+				LastHeardAt:                  heardAt,
+				LatestObserverID:             observerID,
+				LatestObserverPathLengthByte: 0x42,
+				LatestObserverHashSize:       1,
+				LatestObserverHopCount:       2,
+				LatestObserverPathBytes:      []byte{0xa1, 0xb2},
+			},
+		}, nil)
+
+	store := &Store{q: mock}
+	items, err := store.ListPacketsAfterID(context.Background(), 0, -1, -1, nil, "", 50)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	obs := items[0].LatestObserver
+	if obs == nil || obs.PathLength == nil {
+		t.Fatal("expected LatestObserver and PathLength to be set")
+	}
+	if obs.PathLength.HashSize != 1 || obs.PathLength.HopCount != 2 {
+		t.Errorf("expected hashSize=1 hopCount=2, got hashSize=%d hopCount=%d", obs.PathLength.HashSize, obs.PathLength.HopCount)
+	}
+	if obs.PathBytes == nil || *obs.PathBytes != "a1b2" {
+		t.Errorf("expected pathBytes a1b2, got %v", obs.PathBytes)
+	}
+}
+
 func TestListNodeObservations_Pagination(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	mock := mockdb.NewMockQuerier(ctrl)
@@ -362,5 +476,68 @@ func TestListNodeObservations_Pagination(t *testing.T) {
 	}
 	if page.NextCursor == nil {
 		t.Error("expected NextCursor to be set")
+	}
+}
+
+func TestListPackets_IATAFilterRoutesToObservationIndex(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	mock := mockdb.NewMockQuerier(ctrl)
+
+	siteHeard := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	globalHeard := time.Date(2026, 7, 2, 8, 0, 0, 0, time.UTC)
+
+	// limit=1 with 2 rows returned exercises the +1 trick and the trim.
+	mock.EXPECT().
+		ListPacketsByIATAs(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, p sqlc.ListPacketsByIATAsParams) ([]sqlc.ListPacketsByIATAsRow, error) {
+			if len(p.Iatas) != 1 || p.Iatas[0] != "ALF" {
+				t.Errorf("iatas param = %v, want [ALF]", p.Iatas)
+			}
+			if p.PageLimit != 2 { // limit+1
+				t.Errorf("page limit = %d, want 2", p.PageLimit)
+			}
+			if p.ScanDepth != 16 { // (limit+1)*8
+				t.Errorf("scan depth = %d, want 16", p.ScanDepth)
+			}
+			return []sqlc.ListPacketsByIATAsRow{
+				{
+					PacketHash:  []byte{0x01},
+					LastHeardAt: pgtype.Timestamptz{Time: globalHeard, Valid: true},
+					SiteHeardAt: pgtype.Timestamptz{Time: siteHeard, Valid: true},
+				},
+				{
+					PacketHash:  []byte{0x02},
+					LastHeardAt: pgtype.Timestamptz{Time: globalHeard, Valid: true},
+					SiteHeardAt: pgtype.Timestamptz{Time: siteHeard.Add(-time.Hour), Valid: true},
+				},
+			}, nil
+		})
+
+	store := &Store{q: mock}
+	page, err := store.ListPackets(context.Background(), nil, nil, []string{"ALF"}, nil, time.Time{}, time.Time{}, 0, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(page.Items) != 1 || !page.HasMore {
+		t.Fatalf("got %d items hasMore=%v, want 1 item hasMore=true", len(page.Items), page.HasMore)
+	}
+	// Cursor must follow site-local recency, not the packet's global last_heard_at.
+	if page.NextCursor == nil || *page.NextCursor != siteHeard.UnixMilli() {
+		t.Errorf("next cursor = %v, want %d (site heard_at)", page.NextCursor, siteHeard.UnixMilli())
+	}
+}
+
+func TestListPackets_UnfilteredKeepsGlobalQuery(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	mock := mockdb.NewMockQuerier(ctrl)
+
+	// gomock is strict: an unexpected ListPacketsByIATAs call fails the test.
+	mock.EXPECT().
+		ListPackets(gomock.Any(), gomock.Any()).
+		Return([]sqlc.ListPacketsRow{}, nil)
+
+	store := &Store{q: mock}
+	if _, err := store.ListPackets(context.Background(), nil, nil, nil, nil, time.Time{}, time.Time{}, 0, 50); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

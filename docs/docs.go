@@ -62,8 +62,14 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Filter by IATA code (case-insensitive)",
+                        "description": "Filter by IATA code",
                         "name": "iata",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by IATA code(s), comma-separated e.g. YOW or YOW,YYZ",
+                        "name": "iatas",
                         "in": "query"
                     },
                     {
@@ -275,6 +281,43 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.IATA"
                         }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    }
+                }
+            }
+        },
+        "/iatas/{iata}/border": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "IATAs"
+                ],
+                "summary": "Get an IATA's GeoJSON border, if configured",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "3-letter IATA code",
+                        "name": "iata",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "GeoJSON Feature (Polygon or MultiPolygon geometry, with bbox)",
+                        "schema": {
+                            "type": "object"
+                        }
+                    },
+                    "204": {
+                        "description": "IATA exists but has no border configured"
                     },
                     "404": {
                         "description": "Not Found",
@@ -507,6 +550,12 @@ const docTemplate = `{
                         "type": "string",
                         "description": "Exact public key match (hex)",
                         "name": "pubkey",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Partial public key match: hex prefix, case-insensitive",
+                        "name": "pubkeyPrefix",
                         "in": "query"
                     },
                     {
@@ -964,6 +1013,12 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
+                        "description": "Filter by multiple payload types, comma-separated e.g. 2,4",
+                        "name": "payloadTypes",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
                         "description": "Filter by payload type name (advert, grp_txt, txt_msg, trace, anon_req)",
                         "name": "payloadTypeName",
                         "in": "query"
@@ -972,6 +1027,12 @@ const docTemplate = `{
                         "type": "integer",
                         "description": "Filter by route type (0=transport_flood, 1=flood, 2=direct, 3=transport_direct)",
                         "name": "routeType",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by multiple route types, comma-separated e.g. 0,1",
+                        "name": "routeTypes",
                         "in": "query"
                     },
                     {
@@ -990,6 +1051,12 @@ const docTemplate = `{
                         "type": "string",
                         "description": "Filter by transport scope name e.g. %23bc (URL-encoded #bc)",
                         "name": "scope",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by multiple transport scope names, comma-separated e.g. %23bc,%23west",
+                        "name": "scopes",
                         "in": "query"
                     },
                     {
@@ -1018,7 +1085,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "last_heard_at epoch ms of last item for pagination",
+                        "description": "epoch ms of last item for pagination; last_heard_at, or site-local heard_at when iatas is set",
                         "name": "cursor",
                         "in": "query"
                     },
@@ -1516,6 +1583,60 @@ const docTemplate = `{
                 }
             }
         },
+        "/stats/clock-drift": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Stats"
+                ],
+                "summary": "Repeaters/room servers whose clock has drifted beyond the configured threshold, worst first",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Comma-separated IATA codes",
+                        "name": "iatas",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Filter by region ID, expands to member IATAs",
+                        "name": "regionId",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by region slug, expands to member IATAs",
+                        "name": "region",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Max results (default 10)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ClockDriftEntry"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    }
+                }
+            }
+        },
         "/stats/node-types": {
             "get": {
                 "produces": [
@@ -1799,6 +1920,66 @@ const docTemplate = `{
                 }
             }
         },
+        "/stats/top-advertisers": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Stats"
+                ],
+                "summary": "Top N nodes by distinct ADVERT packet count (last 24h by default)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Comma-separated IATA codes",
+                        "name": "iatas",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Filter by region ID, expands to member IATAs",
+                        "name": "regionId",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by region slug, expands to member IATAs",
+                        "name": "region",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Start of window epoch ms (default last 24h)",
+                        "name": "since",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Max results (default 10)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.TopAdvertiser"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    }
+                }
+            }
+        },
         "/stats/top-nodes": {
             "get": {
                 "produces": [
@@ -1901,6 +2082,66 @@ const docTemplate = `{
                             "type": "array",
                             "items": {
                                 "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.TopObserver"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    }
+                }
+            }
+        },
+        "/stats/top-talkers": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Stats"
+                ],
+                "summary": "Top N companion names by decrypted channel message count (last 24h by default)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Comma-separated IATA codes",
+                        "name": "iatas",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Filter by region ID, expands to member IATAs",
+                        "name": "regionId",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by region slug, expands to member IATAs",
+                        "name": "region",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Start of window epoch ms (default last 24h)",
+                        "name": "since",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Max results (default 10)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.TopTalker"
                             }
                         }
                     },
@@ -2180,6 +2421,38 @@ const docTemplate = `{
                 }
             }
         },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.ClockDriftEntry": {
+            "type": "object",
+            "properties": {
+                "clockCheckedAt": {
+                    "description": "epoch ms",
+                    "type": "integer"
+                },
+                "clockDriftSeconds": {
+                    "description": "signed; +ve = device ahead of server",
+                    "type": "integer"
+                },
+                "iatas": {
+                    "description": "IATAs this node has been heard in",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.NodeIATA"
+                    }
+                },
+                "nodeId": {
+                    "type": "string"
+                },
+                "nodeName": {
+                    "type": "string"
+                },
+                "nodeType": {
+                    "type": "integer"
+                },
+                "nodeTypeName": {
+                    "type": "string"
+                }
+            }
+        },
         "github_com_MeshCore-Beacon_beacon-server_internal_api.CrossIATAHop": {
             "type": "object",
             "properties": {
@@ -2292,6 +2565,16 @@ const docTemplate = `{
         "github_com_MeshCore-Beacon_beacon-server_internal_api.Node": {
             "type": "object",
             "properties": {
+                "clockCheckedAt": {
+                    "type": "integer"
+                },
+                "clockDriftSeconds": {
+                    "description": "Clock drift, repeaters/room servers only (nodeType 2/3); omitted entirely for other\nnode types or when no qualifying advert has been measured yet. Device minus server\ntime, in seconds, from the advert's self-reported timestamp: +ve = device ahead.\nclockCheckedAt is the server receive time of the advert this was measured from (same\nmoment as lastAdvertAt). clockOutOfSync is |clockDriftSeconds| exceeding a configured\nthreshold (default 5m) -- see internal/config.ResolvedConfig.ClockDriftThreshold.",
+                    "type": "integer"
+                },
+                "clockOutOfSync": {
+                    "type": "boolean"
+                },
                 "defaultScope": {
                     "description": "most recently matched transport scope name e.g. \"#bc\"",
                     "type": "string"
@@ -2376,8 +2659,12 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "radio": {
-                    "description": "shorthand: \"freqMhz,bwKhz,sf\" e.g. \"910.5,62.5,7\"",
+                    "description": "shorthand: \"freqMhz,bwKhz,sf\" e.g. \"910.525,62.5,7\"",
                     "type": "string"
+                },
+                "stale": {
+                    "description": "Stale is true when the node hasn't been seen (last_seen) within the configured\nstaleness window (default 24h; internal/config.ResolvedConfig.NodeStaleThreshold).\nApplies to every node type, unlike ClockDriftSeconds/ClockOutOfSync on Node, which\nare repeater/room-server only.",
+                    "type": "boolean"
                 },
                 "supportsMultibytePaths": {
                     "description": "firmware \u003e= 1.14.0; detected via path hash size",
@@ -2502,8 +2789,12 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "radio": {
-                    "description": "shorthand: \"freqMhz,bwKhz,sf\" e.g. \"910.5,62.5,7\"",
+                    "description": "shorthand: \"freqMhz,bwKhz,sf\" e.g. \"910.525,62.5,7\"",
                     "type": "string"
+                },
+                "stale": {
+                    "description": "Stale is true when the node hasn't been seen (last_seen) within the configured\nstaleness window (default 24h; internal/config.ResolvedConfig.NodeStaleThreshold).\nApplies to every node type, unlike ClockDriftSeconds/ClockOutOfSync on Node, which\nare repeater/room-server only.",
+                    "type": "boolean"
                 }
             }
         },
@@ -2600,7 +2891,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "radio": {
-                    "description": "friendly radio param string: freqMhz,BwKhz,SF",
+                    "description": "friendly radio param string: freqMhz,BwKhz,SF e.g. \"910.525,62.5,7\"",
                     "type": "string"
                 },
                 "radioBwKhz": {
@@ -2677,7 +2968,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "radio": {
-                    "description": "friendly radio param string: freqMhz,BwKhz,SF",
+                    "description": "friendly radio param string: freqMhz,BwKhz,SF e.g. \"910.525,62.5,7\"",
                     "type": "string"
                 },
                 "scopes": {
@@ -2848,6 +3139,30 @@ const docTemplate = `{
                 },
                 "id": {
                     "type": "string"
+                },
+                "pathBytes": {
+                    "description": "hex-encoded accumulated path hashes",
+                    "type": "string"
+                },
+                "pathLength": {
+                    "description": "PathLength/PathBytes are cheap -- already-stored columns on packet_observations -- and\npopulated everywhere PacketLatestObserver appears: the REST list/backfill endpoints and\nthe WS feed alike. ResolvedPath/ResolvedSource/ResolvedDestination require a per-hash DB\nresolution lookup; they're populated on the WS feed (already computed once at ingest, so\neffectively free there) but deliberately left nil on the REST endpoints, which are\npaginated/high-volume and used only for scrollback and reconnect-gap backfill -- full\nresolution stays a GET /packets/{packetHash}-only feature.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PacketPathLength"
+                        }
+                    ]
+                },
+                "resolvedDestination": {
+                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ResolvedHop"
+                },
+                "resolvedPath": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ResolvedHop"
+                    }
+                },
+                "resolvedSource": {
+                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ResolvedHop"
                 }
             }
         },
@@ -2884,12 +3199,23 @@ const docTemplate = `{
                 "radio": {
                     "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PacketRadio"
                 },
+                "resolvedDestination": {
+                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ResolvedHop"
+                },
                 "resolvedPath": {
                     "description": "per-observation resolved path hashes",
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ResolvedHop"
                     }
+                },
+                "resolvedSource": {
+                    "description": "ResolvedSource/ResolvedDestination are the packet's endpoints, when the payload type\ncarries a resolvable one: an exact match for ADVERT's full pubkey, an ambiguous\nhash-prefix match (like intermediate hops) for TEXT_MESSAGE/PATH/ANON_REQ's 1-byte\nsource/destination hashes. Nil when the payload type doesn't carry one at all (e.g.\nGRP_TXT/GRP_DATA/TRACE aren't node-to-node addressed) -- see BuildResolvedPath and\nResolveExactNode for how each is built.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ResolvedHop"
+                        }
+                    ]
                 },
                 "rssi": {
                     "type": "integer"
@@ -3337,6 +3663,40 @@ const docTemplate = `{
                 }
             }
         },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.TopAdvertiser": {
+            "type": "object",
+            "properties": {
+                "advertCount": {
+                    "type": "integer"
+                },
+                "directAdvertCount": {
+                    "type": "integer"
+                },
+                "floodAdvertCount": {
+                    "description": "FloodAdvertCount/DirectAdvertCount split AdvertCount by how the advert was routed:\nflood = route type 0 (transport_flood) or 1 (flood), broadcast with no known path;\ndirect = route type 2 (direct) or 3 (transport_direct), routed along a known path.\nFloodAdvertCount + DirectAdvertCount == AdvertCount.",
+                    "type": "integer"
+                },
+                "iata": {
+                    "type": "string"
+                },
+                "lastHeard": {
+                    "description": "epoch ms",
+                    "type": "integer"
+                },
+                "nodeId": {
+                    "type": "string"
+                },
+                "nodeName": {
+                    "type": "string"
+                },
+                "nodeType": {
+                    "type": "integer"
+                },
+                "nodeTypeName": {
+                    "type": "string"
+                }
+            }
+        },
         "github_com_MeshCore-Beacon_beacon-server_internal_api.TopNode": {
             "type": "object",
             "properties": {
@@ -3380,6 +3740,21 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "observerType": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.TopTalker": {
+            "type": "object",
+            "properties": {
+                "lastSent": {
+                    "description": "epoch ms",
+                    "type": "integer"
+                },
+                "messageCount": {
+                    "type": "integer"
+                },
+                "senderName": {
                     "type": "string"
                 }
             }
@@ -3553,7 +3928,7 @@ const docTemplate = `{
 
 // SwaggerInfo holds exported Swagger Info so clients can modify it
 var SwaggerInfo = &swag.Spec{
-	Version:          "1.5.4",
+	Version:          "1.6.0",
 	Host:             "localhost:8080",
 	BasePath:         "/api/v1",
 	Schemes:          []string{"http", "https"},

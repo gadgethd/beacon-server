@@ -103,6 +103,13 @@ deployment `resolvedPath` will show `"confidence": "none"` for all hops and
 arrives and populates `node_short_ids`. This is expected behaviour — resolution
 improves automatically as the mesh is observed over time.
 
+Similarly, GRP_TXT packets whose channel key isn't yet known at ingest time are
+stored as hash-only, undecrypted rows. Adding the channel's key to `config.yaml`
+doesn't retroactively decrypt that history immediately — it's picked up
+automatically on the next restart, when Beacon scans for undecrypted packets
+matching a now-known channel and decrypts them. Watch the startup log for
+`backfilled N previously-undecrypted channel message(s)`.
+
 ---
 
 ## Configuration
@@ -129,11 +136,15 @@ improves automatically as the mesh is observed over time.
 ```yaml
 # Optional IATA overrides — auto-created on first packet arrival,
 # only needed if you want to customise display name or coordinates.
+# borderFile points to a GeoJSON Feature (Polygon or MultiPolygon) for the
+# region border map feature; relative paths resolve against this config
+# file's own directory. Validated at boot — invalid geometry fails startup.
 iatas:
   YVR:
     name: Vancouver International
     lat: 49.1967
     lng: -123.1815
+    borderFile: borders/yvr.geojson # optional
 
 # Super-regions grouping multiple IATAs.
 regions:
@@ -175,9 +186,23 @@ telemetry:
 packets:
   retention: 720h # how long to keep packets and observations (default: 30 days)
 
+# Presence write coalescing.
+# Observer last_seen and packet last_heard_at bumps are batched in memory and
+# flushed on an interval instead of writing one row per observation. An
+# unclean shutdown loses at most one interval of presence freshness.
+presence:
+  flush_interval: 30s # how often coalesced bumps are flushed (default: 30s)
+  packet_ttl: 30s # how long a quiet packet stays coalesced before writing through again (default: 30s)
+
 # WebSocket settings.
 websocket:
   max_connections_per_ip: 5 # default: 5
+
+# Node staleness, deletion, and clock-drift thresholds.
+nodes:
+  stale_threshold: 24h # mark a node "stale" in the API after this long unseen (default: 24h)
+  delete_after: 720h # delete a node entirely after this long unseen (default: 30 days, same default as packets.retention)
+  clock_drift_threshold: 5m # |device clock - server clock| above which clockOutOfSync=true for a repeater/room server (default: 5m)
 
 # Redis caching layer (optional).
 # Caches read-heavy, slow-changing responses to reduce PostgreSQL load.
@@ -204,8 +229,8 @@ ingest:
 ```
 
 IATAs are auto-created on first packet arrival. The config file adds display
-names and coordinates. Regions and channel keys must be defined here — they are
-not auto-created.
+names, coordinates, and optional region borders. Regions and channel keys
+must be defined here — they are not auto-created.
 
 ---
 
@@ -358,9 +383,10 @@ Not yet implemented — see the Authentication section above.
 | `GET`  | `/channels/{id}/messages`           | List messages for a channel (optional: `?since=<ms>&iata=<code>&limit=50`)                         |
 | `GET`  | `/iatas`                            | List all known IATA codes                                                                          |
 | `GET`  | `/iatas/{iata}`                     | Get a single IATA code                                                                             |
+| `GET`  | `/iatas/{iata}/border`              | Get an IATA's GeoJSON region border, if configured (204 if not)                                    |
 | `GET`  | `/messages`                         | List all messages (optional: `?channelId=<int>&channelHash=<hex>&iata=<code>&since=<ms>&limit=50`) |
 | `GET`  | `/messages/backfill`                | Backfill messages after a given message ID                                                         |
-| `GET`  | `/nodes`                            | List nodes                                                                                         |
+| `GET`  | `/nodes`                            | List nodes (optional: `?pubkeyPrefix=<hex>&neighbors&iatas=<codes>&pubkey=<hex>`)                  |
 | `GET`  | `/nodes/{nodeId}`                   | Get node detail                                                                                    |
 | `GET`  | `/nodes/{nodeId}/neighbors`         | List neighboring nodes observed in the mesh                                                        |
 | `GET`  | `/nodes/{nodeId}/observations`      | List observations for a node                                                                       |
@@ -368,7 +394,7 @@ Not yet implemented — see the Authentication section above.
 | `GET`  | `/observers/{observerId}`           | Get observer detail including broker last-seen timestamps                                          |
 | `GET`  | `/observers/{observerId}/adverts`   | Adverts heard by observer                                                                          |
 | `GET`  | `/observers/{observerId}/telemetry` | Observer telemetry history (optional: `?range=24h&interval=1h\|6h\|24h`)                           |
-| `GET`  | `/packets`                          | List packets with filters                                                                          |
+| `GET`  | `/packets`                          | List packets (optional: `?payloadTypes=<csv>&routeTypes=<csv>&scopes=<csv>` accept plural, comma-separated values alongside the singular params) |
 | `GET`  | `/packets/backfill`                 | Backfill packets after a given observation ID                                                      |
 | `GET`  | `/packets/{packetHash}`             | Get packet with all observations                                                                   |
 | `GET`  | `/regions`                          | List all regions (summary)                                                                         |
@@ -382,8 +408,10 @@ Not yet implemented — see the Authentication section above.
 | `GET`  | `/stats/overview`                   | Network overview stats                                                                             |
 | `GET`  | `/stats/payload-breakdown`          | Observation counts by payload type (last 24h by default)                                           |
 | `GET`  | `/stats/scopes`                     | Configured region scopes and breakdown of packets, nodes, observers                                |
+| `GET`  | `/stats/top-advertisers`            | Top N nodes by distinct ADVERT packet count (last 24h by default, from materialized view)          |
 | `GET`  | `/stats/top-nodes`                  | Top N nodes by observation count (from materialized view)                                          |
 | `GET`  | `/stats/top-observers`              | Top N observers by observation count (last 24h by default)                                         |
+| `GET`  | `/stats/top-talkers`                | Top N companion names by decrypted channel message count (last 24h by default, from materialized view) |
 | `GET`  | `/traces`                           | List trace tags with filters (optional: ?type=TRACE\|PING)                                         |
 | `GET`  | `/traces/{tag}`                     | Get full trace detail with resolved routes                                                         |
 

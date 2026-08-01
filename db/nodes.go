@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"strings"
 	"time"
 
 	sqlc "github.com/MeshCore-Beacon/beacon-server/db/sqlc"
@@ -21,12 +20,21 @@ import (
 )
 
 func (s *Store) UpsertNode(ctx context.Context, n ingest.UpsertNodeParams, radio ingest.RadioSettings) (uuid.UUID, error) {
+	// advert.Timestamp is only meaningful when the advert actually decoded (AdvertTimestamp
+	// is left at its zero value otherwise); a zero epoch timestamp would misreport as ~55
+	// years of drift, so only compute/store a delta when it's non-zero.
+	var driftSeconds *int32
+	if n.AdvertTimestamp != 0 {
+		d := int32(int64(n.AdvertTimestamp) - time.Now().Unix())
+		driftSeconds = &d
+	}
 	params := sqlc.UpsertNodeParams{
-		PublicKey: n.PublicKey,
-		NodeType:  int16(n.NodeType),
-		Name:      &n.Name,
-		Latitude:  n.Latitude,
-		Longitude: n.Longitude,
+		PublicKey:               n.PublicKey,
+		NodeType:                int16(n.NodeType),
+		Name:                    &n.Name,
+		Latitude:                n.Latitude,
+		Longitude:               n.Longitude,
+		DeviceClockDriftSeconds: driftSeconds,
 	}
 	if radio.FreqMHz != 0 {
 		params.RadioFreqMhz = &radio.FreqMHz
@@ -61,12 +69,13 @@ func (s *Store) UpsertNodeShortID(ctx context.Context, nodeID uuid.UUID, iata st
 	})
 }
 
-func (s *Store) UpsertNodeNeighbor(ctx context.Context, nodeID, neighborID uuid.UUID, iata string, snr *float32) error {
+func (s *Store) UpsertNodeNeighbor(ctx context.Context, nodeID, neighborID uuid.UUID, iata string, snr *float32, regionScope *string) error {
 	return s.q.UpsertNodeNeighbor(ctx, sqlc.UpsertNodeNeighborParams{
-		NodeID:     nodeID,
-		NeighborID: neighborID,
-		Iata:       iata,
-		Snr:        snr,
+		NodeID:      nodeID,
+		NeighborID:  neighborID,
+		Iata:        iata,
+		Snr:         snr,
+		RegionScope: regionScope,
 	})
 }
 
@@ -88,15 +97,14 @@ func (s *Store) SetNodeDefaultScope(ctx context.Context, nodeID uuid.UUID, scope
 	})
 }
 
-func (s *Store) ListNodes(ctx context.Context, nodeType int16, iatas []string, supportsMultibytePaths, supportsMultibyteTraces *bool, pubkey []byte, name, scope string, cursor int64, limit int32, includeNeighbors bool) (api.Page[api.NodeSummary], error) {
+func (s *Store) ListNodes(ctx context.Context, nodeType int16, iatas []string, supportsMultibytePaths, supportsMultibyteTraces *bool, pubkey []byte, pubkeyPrefix, name, scope string, cursor int64, limit int32, includeNeighbors bool) (api.Page[api.NodeSummary], error) {
 	var cursorTS pgtype.Timestamptz
 	if cursor > 0 {
 		cursorTS = pgtype.Timestamptz{Time: time.UnixMilli(cursor), Valid: true}
 	}
-	iataFilter := strings.Join(iatas, ",")
 	rows, err := s.q.ListNodes(ctx, sqlc.ListNodesParams{
 		Column1:  nodeType,
-		Column2:  iataFilter,
+		Column2:  iatas,
 		Column3:  tristate(supportsMultibytePaths),
 		Column4:  tristate(supportsMultibyteTraces),
 		Column5:  pubkey,
@@ -105,6 +113,7 @@ func (s *Store) ListNodes(ctx context.Context, nodeType int16, iatas []string, s
 		Limit:    limit + 1,
 		Column9:  scope,
 		Column10: includeNeighbors,
+		Column11: pubkeyPrefix,
 	})
 	if err != nil {
 		return api.Page[api.NodeSummary]{}, err
@@ -127,6 +136,7 @@ func (s *Store) ListNodes(ctx context.Context, nodeType int16, iatas []string, s
 			ObserverID:         nullableUUID(v.ObserverID),
 			KnownNeighborCount: v.KnownNeighborCount,
 			NeighborIDs:        v.NeighborIds,
+			Stale:              v.LastSeen.Valid && v.LastSeen.Time.Before(time.Now().Add(-s.staleThreshold)),
 		}
 		if len(v.Iatas) > 0 {
 			if err := json.Unmarshal(v.Iatas, &node.IATAs); err != nil {
@@ -135,7 +145,7 @@ func (s *Store) ListNodes(ctx context.Context, nodeType int16, iatas []string, s
 			}
 		}
 		if v.RadioFreqMhz != nil && v.RadioSf != nil && v.RadioBwKhz != nil {
-			s := fmt.Sprintf("%.1f,%g,%d", *v.RadioFreqMhz, *v.RadioBwKhz, *v.RadioSf)
+			s := fmt.Sprintf("%g,%g,%d", *v.RadioFreqMhz, *v.RadioBwKhz, *v.RadioSf)
 			node.Radio = &s
 		}
 		node.Latitude, node.Longitude = api.RedactLocation(node.Name, node.Latitude, node.Longitude)
@@ -171,6 +181,7 @@ func (s *Store) GetNode(ctx context.Context, nodeID uuid.UUID) (*api.Node, error
 			ObserverID:         nullableUUID(row.ObserverID),
 			DefaultScope:       row.DefaultScopeName,
 			KnownNeighborCount: row.KnownNeighborCount,
+			Stale:              row.LastSeen.Valid && row.LastSeen.Time.Before(time.Now().Add(-s.staleThreshold)),
 		},
 		LocationSource:          row.LocationSource,
 		SupportsMultibytePaths:  row.SupportsMultibytePaths,
@@ -193,7 +204,7 @@ func (s *Store) GetNode(ctx context.Context, nodeID uuid.UUID) (*api.Node, error
 		}
 	}
 	if row.RadioFreqMhz != nil && row.RadioSf != nil && row.RadioBwKhz != nil {
-		s := fmt.Sprintf("%.1f,%g,%d", *row.RadioFreqMhz, *row.RadioBwKhz, *row.RadioSf)
+		s := fmt.Sprintf("%g,%g,%d", *row.RadioFreqMhz, *row.RadioBwKhz, *row.RadioSf)
 		node.Radio = &s
 	}
 	if row.LastAdvertAt.Valid {
@@ -204,7 +215,29 @@ func (s *Store) GetNode(ctx context.Context, nodeID uuid.UUID) (*api.Node, error
 	if api.LocationRedacted(node.Name) {
 		node.LocationSource = nil // hide the whole Location section, not just the coordinates
 	}
+	// Only repeaters (2) and room servers (3) sign adverts with a device clock worth
+	// checking; omit entirely (not just zero) for other node types or an unmeasured node
+	// per the API contract, so the frontend can distinguish "unknown" from "in sync".
+	if (row.NodeType == 2 || row.NodeType == 3) && row.DeviceClockDriftSeconds != nil && row.LastAdvertAt.Valid {
+		drift := int(*row.DeviceClockDriftSeconds)
+		node.ClockDriftSeconds = &drift
+		checkedAt := row.LastAdvertAt.Time.UnixMilli()
+		node.ClockCheckedAt = &checkedAt
+		outOfSync := time.Duration(abs(*row.DeviceClockDriftSeconds))*time.Second > s.clockDriftThreshold
+		node.ClockOutOfSync = &outOfSync
+	}
 	return node, nil
+}
+
+// abs returns the absolute value of an int32 without overflowing on math.MinInt32.
+func abs(n int32) int32 {
+	if n < 0 {
+		if n == -2147483648 { // math.MinInt32; -n would overflow
+			return 2147483647
+		}
+		return -n
+	}
+	return n
 }
 
 func (s *Store) GetNodesByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*api.ResolvedNode, error) {
@@ -272,4 +305,10 @@ func (s *Store) GetNodeNeighbors(ctx context.Context, nodeID uuid.UUID) ([]api.N
 
 func (s *Store) ReconfirmNeighbors(ctx context.Context) error {
 	return s.q.ReconfirmNeighbors(ctx)
+}
+
+// DeleteOldNodes deletes nodes not seen since the given cutoff. See the DeleteOldNodes SQL
+// query for the observer_owners exclusion and known_routes caveat.
+func (s *Store) DeleteOldNodes(ctx context.Context, cutoff time.Time) error {
+	return s.q.DeleteOldNodes(ctx, pgtype.Timestamptz{Time: cutoff, Valid: true})
 }

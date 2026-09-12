@@ -209,22 +209,27 @@ func main() {
 	}
 
 	// ── Build geographic ingest filter ───────────────────────────────────────────────────────────
-	allowedIATAs := iatadb.BuildAllowedSet(cfg.Ingest.AllowCountries, cfg.Ingest.AllowContinents)
+	allowedIATAs := iatadb.BuildAllowedSet(cfg.Ingest.AllowCountries, cfg.Ingest.AllowContinents, cfg.Ingest.AllowIatas)
 	if allowedIATAs != nil {
-		log.Printf("config: ingest filter active — %d allowed IATAs (countries=%v continents=%v)",
-			len(allowedIATAs), cfg.Ingest.AllowCountries, cfg.Ingest.AllowContinents)
+		log.Printf("config: ingest filter active — %d allowed IATAs (countries=%v continents=%v iatas=%v)",
+			len(allowedIATAs), cfg.Ingest.AllowCountries, cfg.Ingest.AllowContinents, cfg.Ingest.AllowIatas)
 	} else {
 		log.Printf("config: ingest filter inactive — accepting all IATAs")
+	}
+	allowedObserverPubkeys := ingest.BuildObserverPubkeySet(cfg.Ingest.AllowObserverPubkeys)
+	if allowedObserverPubkeys != nil {
+		log.Printf("config: ingest observer filter active — %d allowed observer pubkeys", len(allowedObserverPubkeys))
 	}
 
 	broker1 := ingest.New(
 		ingest.Config{
-			BrokerName:          "mqtt1",
-			URL:                 getEnv("MQTT_BROKER_1_URL"),
-			Username:            getEnv("MQTT_BROKER_1_USERNAME"),
-			Password:            getEnv("MQTT_BROKER_1_PASSWORD"),
-			TelemetryResolution: resolved.TelemetryResolution,
-			AllowedIATAs:        allowedIATAs,
+			BrokerName:             "mqtt1",
+			URL:                    getEnv("MQTT_BROKER_1_URL"),
+			Username:               getEnv("MQTT_BROKER_1_USERNAME"),
+			Password:               getEnv("MQTT_BROKER_1_PASSWORD"),
+			TelemetryResolution:    resolved.TelemetryResolution,
+			AllowedIATAs:           allowedIATAs,
+			AllowedObserverPubkeys: allowedObserverPubkeys,
 		},
 		coalescer,
 		h,
@@ -234,12 +239,13 @@ func main() {
 
 	broker2 := ingest.New(
 		ingest.Config{
-			BrokerName:          "mqtt2",
-			URL:                 getEnv("MQTT_BROKER_2_URL"),
-			Username:            getEnv("MQTT_BROKER_2_USERNAME"),
-			Password:            getEnv("MQTT_BROKER_2_PASSWORD"),
-			TelemetryResolution: resolved.TelemetryResolution,
-			AllowedIATAs:        allowedIATAs,
+			BrokerName:             "mqtt2",
+			URL:                    getEnv("MQTT_BROKER_2_URL"),
+			Username:               getEnv("MQTT_BROKER_2_USERNAME"),
+			Password:               getEnv("MQTT_BROKER_2_PASSWORD"),
+			TelemetryResolution:    resolved.TelemetryResolution,
+			AllowedIATAs:           allowedIATAs,
+			AllowedObserverPubkeys: allowedObserverPubkeys,
 		},
 		coalescer,
 		h,
@@ -263,11 +269,16 @@ func main() {
 	go scheduler.Start(ctx)
 
 	// ── HTTP server ──────────────────────────────────────────────────────────
-	r := router.New(h, reader, []*ingest.Worker{broker1, broker2}, resolved.MaxConnsPerIP, cfg.CORS)
+	r := router.New(h, reader, []*ingest.Worker{broker1, broker2}, resolved.WebSocket, cfg.CORS)
 
 	srv := &http.Server{
-		Addr:    addr,
-		Handler: r,
+		Addr:              addr,
+		Handler:           r,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20, // 1 MiB
 	}
 
 	go func() {

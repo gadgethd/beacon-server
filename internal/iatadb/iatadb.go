@@ -14,6 +14,8 @@
 //go:generate go run ./gen
 package iatadb
 
+import "strings"
+
 // Lookup returns the Entry for the given IATA code, and whether it was found.
 func Lookup(iata string) (Entry, bool) {
 	e, ok := DB[iata]
@@ -32,11 +34,18 @@ func ContinentFor(iata string) string {
 	return DB[iata].Continent
 }
 
-// BuildAllowedSet returns a set of IATA codes permitted by the given country
-// and continent allowlists. If both slices are empty, returns nil (no filter).
-// An IATA passes if it matches any entry in either list (OR semantics).
-func BuildAllowedSet(allowCountries, allowContinents []string) map[string]struct{} {
-	if len(allowCountries) == 0 && len(allowContinents) == 0 {
+// BuildAllowedSet returns a set of IATA codes permitted by the given country,
+// continent, and explicit IATA allowlists. If all slices are empty, returns nil
+// (no filter). An IATA passes if it matches any entry in any list (OR semantics).
+func BuildAllowedSet(allowCountries, allowContinents, allowIatas []string) map[string]struct{} {
+	explicit := make(map[string]struct{}, len(allowIatas))
+	for _, iata := range allowIatas {
+		iata = strings.ToUpper(strings.TrimSpace(iata))
+		if iata != "" {
+			explicit[iata] = struct{}{}
+		}
+	}
+	if len(allowCountries) == 0 && len(allowContinents) == 0 && len(explicit) == 0 {
 		return nil
 	}
 	countrySet := make(map[string]struct{}, len(allowCountries))
@@ -56,6 +65,9 @@ func BuildAllowedSet(allowCountries, allowContinents []string) map[string]struct
 		if _, ok := continentSet[entry.Continent]; ok {
 			allowed[iata] = struct{}{}
 		}
+	}
+	for iata := range explicit {
+		allowed[iata] = struct{}{}
 	}
 	return allowed
 }

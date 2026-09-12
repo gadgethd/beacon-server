@@ -30,6 +30,10 @@ func (s *Store) UpsertObserver(ctx context.Context, pubkey []byte) (uuid.UUID, s
 }
 
 func (s *Store) ListObservers(ctx context.Context, iatas []string, observerType, broker, status, name, scope string, cursor int64, limit int32) (api.Page[api.ObserverSummary], error) {
+	limit = clampQueryLimit(limit)
+	ctx, cancel := withStatementTimeout(ctx)
+	defer cancel()
+
 	var cursorTS pgtype.Timestamptz
 	if cursor > 0 {
 		cursorTS = pgtype.Timestamptz{Time: time.UnixMilli(cursor), Valid: true}
@@ -41,17 +45,14 @@ func (s *Store) ListObservers(ctx context.Context, iatas []string, observerType,
 		Column4: status,
 		Column5: name,
 		Column6: cursorTS,
-		Limit:   limit + 1,
+		Limit:   limit,
 		Column8: scope,
 	}
 	rows, err := s.q.ListObservers(ctx, params)
 	if err != nil {
 		return api.Page[api.ObserverSummary]{}, err
 	}
-	hasMore := len(rows) > int(limit)
-	if hasMore {
-		rows = rows[:limit]
-	}
+	hasMore := len(rows) == int(limit)
 	items := make([]api.ObserverSummary, 0, len(rows))
 	for _, v := range rows {
 		observer := api.ObserverSummary{
@@ -227,19 +228,20 @@ func (s *Store) GetObserverTelemetryBucketed(ctx context.Context, observerID uui
 }
 
 func (s *Store) ListObserverAdverts(ctx context.Context, observerID uuid.UUID, cursor int64, limit int32) (api.Page[api.AdvertObservation], error) {
+	limit = clampQueryLimit(limit)
+	ctx, cancel := withStatementTimeout(ctx)
+	defer cancel()
+
 	rows, err := s.q.ListObserverAdverts(ctx, sqlc.ListObserverAdvertsParams{
 		ObserverID: observerID,
 		Column2:    cursor,
-		Limit:      limit + 1, // fetch one extra to detect hasMore
+		Limit:      limit,
 	})
 	if err != nil {
 		log.Printf("api: ListObserverAdverts failed: %v", err)
 		return api.Page[api.AdvertObservation]{}, err
 	}
-	hasMore := len(rows) > int(limit)
-	if hasMore {
-		rows = rows[:limit]
-	}
+	hasMore := len(rows) == int(limit)
 	items := make([]api.AdvertObservation, 0, len(rows))
 	for _, v := range rows {
 		items = append(items, api.AdvertObservation{

@@ -38,6 +38,10 @@ func (s *Store) UpsertKnownRoute(ctx context.Context, nodeIDs []uuid.UUID, hashP
 }
 
 func (s *Store) ListKnownRoutes(ctx context.Context, iata string, hopCount int32, cursor time.Time, limit int32) ([]api.KnownRoute, error) {
+	limit = clampQueryLimit(limit)
+	ctx, cancel := withStatementTimeout(ctx)
+	defer cancel()
+
 	var cursorTS pgtype.Timestamptz
 	if !cursor.IsZero() {
 		cursorTS = pgtype.Timestamptz{Time: cursor, Valid: true}

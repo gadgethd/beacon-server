@@ -78,6 +78,10 @@ func (s *Store) DeleteOldChannelIATAs(ctx context.Context, cutoff time.Time) err
 }
 
 func (s *Store) ListChannels(ctx context.Context, limit int32, hash []byte, iatas []string, cursor int64) (api.Page[api.ChannelSummary], error) {
+	limit = clampQueryLimit(limit)
+	ctx, cancel := withStatementTimeout(ctx)
+	defer cancel()
+
 	var cursorTS pgtype.Timestamptz
 	if cursor > 0 {
 		cursorTS = pgtype.Timestamptz{Time: time.UnixMilli(cursor), Valid: true}
@@ -86,15 +90,12 @@ func (s *Store) ListChannels(ctx context.Context, limit int32, hash []byte, iata
 		ChannelHash: hash,
 		Iatas:       iatas,
 		CursorTs:    cursorTS,
-		PageLimit:   limit + 1,
+		PageLimit:   limit,
 	})
 	if err != nil {
 		return api.Page[api.ChannelSummary]{}, err
 	}
-	hasMore := len(rows) > int(limit)
-	if hasMore {
-		rows = rows[:limit]
-	}
+	hasMore := len(rows) == int(limit)
 	items := make([]api.ChannelSummary, 0, len(rows))
 	for _, v := range rows {
 		items = append(items, api.ChannelSummary{
@@ -158,6 +159,10 @@ func (s *Store) InsertChannelMessage(ctx context.Context, m ingest.InsertChannel
 }
 
 func (s *Store) ListChannelMessages(ctx context.Context, channelID *int32, since time.Time, limit int32, iatas []string, scope string, cursor int64) (api.Page[api.ChannelMessage], error) {
+	limit = clampQueryLimit(limit)
+	ctx, cancel := withStatementTimeout(ctx)
+	defer cancel()
+
 	ts := pgtype.Timestamptz{Time: since, Valid: !since.IsZero()}
 	var messages []api.ChannelMessage
 	var hasMore bool
@@ -167,15 +172,12 @@ func (s *Store) ListChannelMessages(ctx context.Context, channelID *int32, since
 			Column2: iatas,
 			Column3: scope,
 			Column4: cursor,
-			Limit:   limit + 1,
+			Limit:   limit,
 		})
 		if err != nil {
 			return api.Page[api.ChannelMessage]{}, err
 		}
-		hasMore = len(rows) > int(limit)
-		if hasMore {
-			rows = rows[:limit]
-		}
+		hasMore = len(rows) == int(limit)
 		messages = make([]api.ChannelMessage, 0, len(rows))
 		for _, v := range rows {
 			messages = append(messages, toChannelMessage(v.ID, v.PacketHashHex, v.ChannelHash, v.SenderName, v.Content, v.SentAt, v.ObservationCount))
@@ -187,15 +189,12 @@ func (s *Store) ListChannelMessages(ctx context.Context, channelID *int32, since
 			Column3:   iatas,
 			Column4:   scope,
 			Column5:   cursor,
-			Limit:     limit + 1,
+			Limit:     limit,
 		})
 		if err != nil {
 			return api.Page[api.ChannelMessage]{}, err
 		}
-		hasMore = len(rows) > int(limit)
-		if hasMore {
-			rows = rows[:limit]
-		}
+		hasMore = len(rows) == int(limit)
 		messages = make([]api.ChannelMessage, 0, len(rows))
 		for _, v := range rows {
 			messages = append(messages, toChannelMessage(v.ID, v.PacketHashHex, v.ChannelHash, v.SenderName, v.Content, v.SentAt, v.ObservationCount))
@@ -215,21 +214,22 @@ func (s *Store) ListChannelMessages(ctx context.Context, channelID *int32, since
 }
 
 func (s *Store) ListChannelMessagesByHash(ctx context.Context, hash []byte, since time.Time, limit int32, iatas []string, scope string, cursor int64) (api.Page[api.ChannelMessage], error) {
+	limit = clampQueryLimit(limit)
+	ctx, cancel := withStatementTimeout(ctx)
+	defer cancel()
+
 	rows, err := s.q.ListChannelMessagesByHash(ctx, sqlc.ListChannelMessagesByHashParams{
 		ChannelHash: hash,
 		Column2:     pgtype.Timestamptz{Time: since, Valid: !since.IsZero()},
 		Column3:     iatas,
 		Column4:     scope,
 		Column5:     cursor,
-		Limit:       limit + 1,
+		Limit:       limit,
 	})
 	if err != nil {
 		return api.Page[api.ChannelMessage]{}, err
 	}
-	hasMore := len(rows) > int(limit)
-	if hasMore {
-		rows = rows[:limit]
-	}
+	hasMore := len(rows) == int(limit)
 	messages := make([]api.ChannelMessage, 0, len(rows))
 	for _, v := range rows {
 		messages = append(messages, toChannelMessage(v.ID, hex.EncodeToString(v.PacketHash), v.ChannelHash, v.SenderName, v.Content, v.SentAt, v.ObservationCount))
@@ -247,6 +247,10 @@ func (s *Store) ListChannelMessagesByHash(ctx context.Context, hash []byte, sinc
 }
 
 func (s *Store) ListMessagesAfterID(ctx context.Context, afterID int64, iatas []string, scope string, limit int32) ([]api.ChannelMessage, error) {
+	limit = clampQueryLimit(limit)
+	ctx, cancel := withStatementTimeout(ctx)
+	defer cancel()
+
 	rows, err := s.q.ListMessagesAfterID(ctx, sqlc.ListMessagesAfterIDParams{
 		ID:      afterID,
 		Column2: iatas,

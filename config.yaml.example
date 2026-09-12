@@ -95,7 +95,14 @@ routes:
   min_observations: 3
 
 websocket:
-  max_connections_per_ip: 5 # default: 5
+  max_connections: 1000          # global concurrent connection cap
+  max_connections_per_ip: 50     # concurrent connections per resolved client IP
+  handshakes_per_minute: 5       # upgrade attempts per resolved client IP
+  # Forwarding headers are ignored unless the socket peer is in one of these
+  # networks. List only reverse proxies you operate; leave empty for direct use.
+  trusted_proxy_cidrs:
+    - "127.0.0.0/8"
+    - "::1/128"
 
 # Node staleness, deletion, and clock-drift thresholds.
 #nodes:
@@ -139,11 +146,17 @@ cache:
 # Country codes are ISO 3166-1 alpha-2 (e.g. CA, US, GB).
 # Continent codes: AF (Africa), AN (Antarctica), AS (Asia),
 #                  EU (Europe), NA (North America), OC (Oceania), SA (South America).
-# If both are set an IATA passes if it matches either (OR semantics).
-# Omit this section entirely to accept packets from all IATAs (default).
+# allow_iatas lists IATA codes directly; it is combined with the country and
+# continent filters using OR semantics.
+# allow_observer_pubkeys, when set, drops messages from any observer whose
+# hex-encoded public key is not listed (AND with the geographic filters).
+# Omit this section entirely to accept packets from all IATAs and observers.
 #ingest:
 #  allow_countries: [CA, US]
 #  allow_continents: [NA]
+#  allow_iatas: [YVR, SEA]
+#  allow_observer_pubkeys:
+#    - "1155ABBF9B01168031BD70A1E7691AA345747604A5F2197182D03782CD34771A"
 
 # Background task intervals.
 # Shorter intervals are useful during initial deployment to confirm data is

@@ -10,7 +10,8 @@ import (
 	"github.com/meshcore-go/meshcore-go"
 )
 
-// NodeNeighbor represents a neighboring node relationship observed in a given IATA.
+// NodeNeighbor is the internal node-neighbor read model. Use ToPublicNodeNeighbor
+// before returning it from a public handler.
 type NodeNeighbor struct {
 	ID               uuid.UUID `json:"id"`
 	Name             *string   `json:"name,omitempty"`
@@ -32,7 +33,7 @@ type NodeIATA struct {
 	LastHeard int64  `json:"lastHeard"` // epoch ms
 }
 
-// NodeSummary is the minimal node representation used in list responses.
+// NodeSummary is the internal node read model used in list responses.
 type NodeSummary struct {
 	ID                 uuid.UUID   `json:"id"`
 	PublicKey          string      `json:"publicKey"` // hex-encoded Ed25519 public key
@@ -55,8 +56,8 @@ type NodeSummary struct {
 	Stale bool `json:"stale"`
 }
 
-// Node is the full node representation including firmware capability flags,
-// location source, and timing metadata.
+// Node is the internal full node read model. It may contain database metadata;
+// use ToPublicNode before serializing it in a public response.
 type Node struct {
 	NodeSummary
 	LocationSource          *string        `json:"locationSource,omitempty"`     // "advert" or "manual"
@@ -77,6 +78,176 @@ type Node struct {
 	ClockDriftSeconds *int   `json:"clockDriftSeconds,omitempty"`
 	ClockOutOfSync    *bool  `json:"clockOutOfSync,omitempty"`
 	ClockCheckedAt    *int64 `json:"clockCheckedAt,omitempty"`
+}
+
+// PublicNodeIATA is the public representation of a node's IATA history.
+type PublicNodeIATA struct {
+	IATA      string `json:"iata"`
+	LastHeard int64  `json:"lastHeard"` // epoch ms
+}
+
+// PublicNodeNeighbor is the public representation of a neighboring node
+// relationship. It intentionally contains no database-only fields.
+type PublicNodeNeighbor struct {
+	ID               uuid.UUID `json:"id"`
+	Name             *string   `json:"name,omitempty"`
+	PublicKey        string    `json:"publicKey"`
+	NodeType         int16     `json:"nodeType"`
+	NodeTypeName     string    `json:"nodeTypeName"`
+	Latitude         *float64  `json:"lat,omitempty"`
+	Longitude        *float64  `json:"lng,omitempty"`
+	IATA             string    `json:"iata"`
+	ObservationCount int64     `json:"observationCount"`
+	FirstSeen        int64     `json:"firstSeen"` // epoch ms
+	LastSeen         int64     `json:"lastSeen"`  // epoch ms
+	SNR              *float32  `json:"snr,omitempty"`
+}
+
+// PublicNodeSummary is the allowlisted node representation returned by public
+// list endpoints.
+type PublicNodeSummary struct {
+	ID                 uuid.UUID        `json:"id"`
+	PublicKey          string           `json:"publicKey"`
+	NodeType           int16            `json:"nodeType"`
+	NodeTypeName       string           `json:"nodeTypeName"`
+	Name               *string          `json:"name,omitempty"`
+	IsObserver         bool             `json:"isObserver"`
+	ObserverID         *uuid.UUID       `json:"observerId,omitempty"`
+	Latitude           *float64         `json:"lat,omitempty"`
+	Longitude          *float64         `json:"lng,omitempty"`
+	Radio              *string          `json:"radio,omitempty"`
+	IATAs              []PublicNodeIATA `json:"iatas"`
+	DefaultScope       *string          `json:"defaultScope,omitempty"`
+	KnownNeighborCount int64            `json:"knownNeighborCount"`
+	NeighborIDs        []uuid.UUID      `json:"neighborIds,omitempty"`
+	Stale              bool             `json:"stale"`
+}
+
+// PublicNode is the allowlisted node detail response. Metadata is deliberately
+// absent: Node.Metadata is an internal/raw JSONB field and must not cross the
+// public API boundary.
+type PublicNode struct {
+	PublicNodeSummary
+	LocationSource          *string              `json:"locationSource,omitempty"`
+	LastAdvertAt            *int64               `json:"lastAdvertAt,omitempty"`
+	SupportsMultibytePaths  bool                 `json:"supportsMultibytePaths"`
+	SupportsMultibyteTraces bool                 `json:"supportsMultibyteTraces"`
+	MinFirmwareVersion      *string              `json:"minFirmwareVersion,omitempty"`
+	FirstSeen               int64                `json:"firstSeen"`
+	LastSeen                int64                `json:"lastSeen"`
+	Neighbors               []PublicNodeNeighbor `json:"neighbors"`
+	ClockDriftSeconds       *int                 `json:"clockDriftSeconds,omitempty"`
+	ClockOutOfSync          *bool                `json:"clockOutOfSync,omitempty"`
+	ClockCheckedAt          *int64               `json:"clockCheckedAt,omitempty"`
+}
+
+// ToPublicNodeIATA maps an internal node IATA record to its public DTO.
+func ToPublicNodeIATA(iata NodeIATA) PublicNodeIATA {
+	return PublicNodeIATA{
+		IATA:      iata.IATA,
+		LastHeard: iata.LastHeard,
+	}
+}
+
+// ToPublicNodeNeighbor maps an internal node-neighbor record to its public DTO.
+func ToPublicNodeNeighbor(neighbor NodeNeighbor) PublicNodeNeighbor {
+	return PublicNodeNeighbor{
+		ID:               neighbor.ID,
+		Name:             neighbor.Name,
+		PublicKey:        neighbor.PublicKey,
+		NodeType:         neighbor.NodeType,
+		NodeTypeName:     neighbor.NodeTypeName,
+		Latitude:         neighbor.Latitude,
+		Longitude:        neighbor.Longitude,
+		IATA:             neighbor.IATA,
+		ObservationCount: neighbor.ObservationCount,
+		FirstSeen:        neighbor.FirstSeen,
+		LastSeen:         neighbor.LastSeen,
+		SNR:              neighbor.SNR,
+	}
+}
+
+// ToPublicNodeSummary maps an internal node summary to its public DTO.
+func ToPublicNodeSummary(node NodeSummary) PublicNodeSummary {
+	public := PublicNodeSummary{
+		ID:                 node.ID,
+		PublicKey:          node.PublicKey,
+		NodeType:           node.NodeType,
+		NodeTypeName:       node.NodeTypeName,
+		Name:               node.Name,
+		IsObserver:         node.IsObserver,
+		ObserverID:         node.ObserverID,
+		Latitude:           node.Latitude,
+		Longitude:          node.Longitude,
+		Radio:              node.Radio,
+		DefaultScope:       node.DefaultScope,
+		KnownNeighborCount: node.KnownNeighborCount,
+		Stale:              node.Stale,
+	}
+	if node.IATAs != nil {
+		public.IATAs = make([]PublicNodeIATA, len(node.IATAs))
+		for i, iata := range node.IATAs {
+			public.IATAs[i] = ToPublicNodeIATA(iata)
+		}
+	}
+	if node.NeighborIDs != nil {
+		public.NeighborIDs = append([]uuid.UUID(nil), node.NeighborIDs...)
+	}
+	return public
+}
+
+// ToPublicNodePage maps a node list page to an allowlisted public page.
+func ToPublicNodePage(page Page[NodeSummary]) Page[PublicNodeSummary] {
+	public := Page[PublicNodeSummary]{
+		NextCursor: page.NextCursor,
+		HasMore:    page.HasMore,
+	}
+	if page.Items != nil {
+		public.Items = make([]PublicNodeSummary, len(page.Items))
+		for i, node := range page.Items {
+			public.Items[i] = ToPublicNodeSummary(node)
+		}
+	}
+	return public
+}
+
+// ToPublicNode maps an internal full node read model to its public DTO.
+func ToPublicNode(node *Node) *PublicNode {
+	if node == nil {
+		return nil
+	}
+	public := &PublicNode{
+		PublicNodeSummary:       ToPublicNodeSummary(node.NodeSummary),
+		LocationSource:          node.LocationSource,
+		LastAdvertAt:            node.LastAdvertAt,
+		SupportsMultibytePaths:  node.SupportsMultibytePaths,
+		SupportsMultibyteTraces: node.SupportsMultibyteTraces,
+		MinFirmwareVersion:      node.MinFirmwareVersion,
+		FirstSeen:               node.FirstSeen,
+		LastSeen:                node.LastSeen,
+		ClockDriftSeconds:       node.ClockDriftSeconds,
+		ClockOutOfSync:          node.ClockOutOfSync,
+		ClockCheckedAt:          node.ClockCheckedAt,
+	}
+	if node.Neighbors != nil {
+		public.Neighbors = make([]PublicNodeNeighbor, len(node.Neighbors))
+		for i, neighbor := range node.Neighbors {
+			public.Neighbors[i] = ToPublicNodeNeighbor(neighbor)
+		}
+	}
+	return public
+}
+
+// ToPublicNodeNeighbors maps internal node-neighbor records to public DTOs.
+func ToPublicNodeNeighbors(neighbors []NodeNeighbor) []PublicNodeNeighbor {
+	if neighbors == nil {
+		return nil
+	}
+	public := make([]PublicNodeNeighbor, len(neighbors))
+	for i, neighbor := range neighbors {
+		public[i] = ToPublicNodeNeighbor(neighbor)
+	}
+	return public
 }
 
 // NodeTypeName returns a human-readable name for a node type integer.

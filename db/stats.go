@@ -80,6 +80,10 @@ func (s *Store) GetStatsPayloadBreakdown(ctx context.Context, iatas []string, si
 }
 
 func (s *Store) GetStatsTopNodes(ctx context.Context, iatas []string, limit int32) ([]api.TopNode, error) {
+	limit = clampQueryLimit(limit)
+	ctx, cancel := withStatementTimeout(ctx)
+	defer cancel()
+
 	rows, err := s.q.GetTopNodes(ctx, sqlc.GetTopNodesParams{
 		Column1: iatas,
 		Limit:   limit,
@@ -107,6 +111,10 @@ func (s *Store) GetStatsTopNodes(ctx context.Context, iatas []string, limit int3
 }
 
 func (s *Store) GetStatsTopObservers(ctx context.Context, iatas []string, since time.Time, limit int32) ([]api.TopObserver, error) {
+	limit = clampQueryLimit(limit)
+	ctx, cancel := withStatementTimeout(ctx)
+	defer cancel()
+
 	if since.IsZero() {
 		since = time.Now().Add(-24 * time.Hour)
 	}
@@ -133,6 +141,10 @@ func (s *Store) GetStatsTopObservers(ctx context.Context, iatas []string, since 
 }
 
 func (s *Store) GetStatsTopAdvertisers(ctx context.Context, iatas []string, since time.Time, limit int32) ([]api.TopAdvertiser, error) {
+	limit = clampQueryLimit(limit)
+	ctx, cancel := withStatementTimeout(ctx)
+	defer cancel()
+
 	if since.IsZero() {
 		since = time.Now().Add(-24 * time.Hour)
 	}
@@ -165,6 +177,10 @@ func (s *Store) GetStatsTopAdvertisers(ctx context.Context, iatas []string, sinc
 // GetStatsClockDrift returns repeaters/room servers whose current advert-derived clock
 // drift exceeds the Store's configured threshold, worst first.
 func (s *Store) GetStatsClockDrift(ctx context.Context, iatas []string, limit int32) ([]api.ClockDriftEntry, error) {
+	limit = clampQueryLimit(limit)
+	ctx, cancel := withStatementTimeout(ctx)
+	defer cancel()
+
 	thresholdSeconds := int32(s.clockDriftThreshold / time.Second)
 	rows, err := s.q.GetStatsClockDrift(ctx, sqlc.GetStatsClockDriftParams{
 		Column1: thresholdSeconds,
@@ -196,6 +212,10 @@ func (s *Store) GetStatsClockDrift(ctx context.Context, iatas []string, limit in
 }
 
 func (s *Store) GetStatsTopTalkers(ctx context.Context, iatas []string, since time.Time, limit int32) ([]api.TopTalker, error) {
+	limit = clampQueryLimit(limit)
+	ctx, cancel := withStatementTimeout(ctx)
+	defer cancel()
+
 	if since.IsZero() {
 		since = time.Now().Add(-24 * time.Hour)
 	}

@@ -30,6 +30,10 @@ const (
 	EventObserverStatus    EventType = "observerStatus"
 	EventNodeUpdate        EventType = "nodeUpdate"
 	EventChannelMessage    EventType = "channelMessage"
+
+	// MaxSubscriptionsPerClient is enforced in the hub so every caller, not
+	// just the public WebSocket handler, gets the same hard bound.
+	MaxSubscriptionsPerClient = 16
 )
 
 // Event is a single fan-out unit. Payload is pre-serialised JSON so the
@@ -136,6 +140,7 @@ type subscribeMsg struct {
 	client         *Client
 	scope          Scope
 	subscriptionID string
+	result         chan bool
 
 	isConfigure bool
 	resolvePath bool
@@ -144,6 +149,7 @@ type subscribeMsg struct {
 type unsubscribeMsg struct {
 	client         *Client
 	subscriptionID string
+	result         chan bool
 }
 
 // configureMsg carries a connection-wide setting change, decoupled from the
@@ -178,17 +184,22 @@ func (h *Hub) NewClient() *Client {
 	return c
 }
 
-// AddScope appends a subscription scope to a client. Called by the WS handler
-// when it receives a "subscribe" message from the client.
-func (h *Hub) AddScope(c *Client, id string, s Scope) {
-	h.subscribe <- subscribeMsg{client: c, scope: s, subscriptionID: id}
+// AddScope appends a subscription scope to a client and reports whether it was
+// accepted. At most MaxSubscriptionsPerClient distinct IDs may exist for one
+// client. The acknowledgement is serialized through Run so simultaneous
+// callers cannot race past the bound.
+func (h *Hub) AddScope(c *Client, id string, s Scope) bool {
+	result := make(chan bool, 1)
+	h.subscribe <- subscribeMsg{client: c, scope: s, subscriptionID: id, result: result}
+	return <-result
 }
 
-// RemoveScope removes a single subscription by ID. Called by the WS handler
-// when it receives an "unsubscribe" message from the client. Silently ignored
-// if the ID is not found.
-func (h *Hub) RemoveScope(c *Client, id string) {
-	h.unsubscribe <- unsubscribeMsg{client: c, subscriptionID: id}
+// RemoveScope removes a single subscription by ID and reports whether it was
+// present. The acknowledgement preserves ordering with a following AddScope.
+func (h *Hub) RemoveScope(c *Client, id string) bool {
+	result := make(chan bool, 1)
+	h.unsubscribe <- unsubscribeMsg{client: c, subscriptionID: id, result: result}
+	return <-result
 }
 
 // SetResolvePath toggles a client's opt-in to the resolvedPath variant of
@@ -241,14 +252,29 @@ func (h *Hub) Run() {
 				}
 			default:
 				// AddScope path — client must already be registered.
+				accepted := false
 				if _, ok := clients[msg.client]; ok {
-					msg.client.subscriptions[msg.subscriptionID] = msg.scope
+					_, exists := msg.client.subscriptions[msg.subscriptionID]
+					if exists || len(msg.client.subscriptions) < MaxSubscriptionsPerClient {
+						msg.client.subscriptions[msg.subscriptionID] = msg.scope
+						accepted = true
+					}
+				}
+				if msg.result != nil {
+					msg.result <- accepted
 				}
 			}
 
 		case msg := <-h.unsubscribe:
+			removed := false
 			if _, ok := clients[msg.client]; ok {
-				delete(msg.client.subscriptions, msg.subscriptionID)
+				if _, exists := msg.client.subscriptions[msg.subscriptionID]; exists {
+					delete(msg.client.subscriptions, msg.subscriptionID)
+					removed = true
+				}
+			}
+			if msg.result != nil {
+				msg.result <- removed
 			}
 
 		case c := <-h.remove:

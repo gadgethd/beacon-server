@@ -40,7 +40,7 @@ type ResolvedConfig struct {
 	RouteRetention       time.Duration
 	RouteGrace           time.Duration
 	RouteMinObservations int
-	MaxConnsPerIP        int
+	WebSocket            ResolvedWebSocketConfig
 	ViewRefreshInterval  time.Duration
 	ReconfirmInterval    time.Duration
 	CleanupInterval      time.Duration
@@ -169,9 +169,30 @@ type TelemetryConfig struct {
 // WebSocketConfig controls WebSocket connection behaviour.
 // Settings here apply to the /ws endpoint only.
 type WebSocketConfig struct {
+	// MaxConnections is the process-wide concurrent WebSocket connection cap.
+	// Defaults to 1000 if not set.
+	MaxConnections int `yaml:"max_connections"`
+
 	// MaxConnectionsPerIP is the maximum number of concurrent WebSocket
-	// connections allowed from a single IP address. Defaults to 5 if not set.
+	// connections allowed from a single client IP. Defaults to 50 if not set.
 	MaxConnectionsPerIP int `yaml:"max_connections_per_ip"`
+
+	// HandshakesPerMinute bounds upgrade attempts per client IP. Rejected
+	// attempts also count. Defaults to 5 if not set.
+	HandshakesPerMinute int `yaml:"handshakes_per_minute"`
+
+	// TrustedProxyCIDRs lists socket peers allowed to supply X-Forwarded-For or
+	// X-Real-IP. It is empty by default, so forwarding headers are ignored unless
+	// the operator explicitly defines the reverse proxy network(s).
+	TrustedProxyCIDRs []string `yaml:"trusted_proxy_cidrs"`
+}
+
+// ResolvedWebSocketConfig holds WebSocket limits with defaults applied.
+type ResolvedWebSocketConfig struct {
+	MaxConnections      int
+	MaxConnectionsPerIP int
+	HandshakesPerMinute int
+	TrustedProxyCIDRs   []string
 }
 
 // PacketsConfig controls packet retention behaviour.
@@ -286,6 +307,15 @@ type IngestFilterConfig struct {
 	// AllowContinents is a list of continent codes to accept.
 	// Packets from observers in other continents are dropped at ingest.
 	AllowContinents []string `yaml:"allow_continents"`
+
+	// AllowIatas is a list of IATA codes to accept directly, independent of
+	// coordinates. Combined with the country/continent filters using OR
+	// semantics.
+	AllowIatas []string `yaml:"allow_iatas"`
+
+	// AllowObserverPubkeys is a list of observer public keys (hex-encoded) to
+	// accept. When set, messages from any other observer are dropped at ingest.
+	AllowObserverPubkeys []string `yaml:"allow_observer_pubkeys"`
 }
 
 // Load reads and parses the config file at path.
@@ -322,10 +352,15 @@ func Resolve(cfg *Config) ResolvedConfig {
 		RouteRetention:       cfg.Routes.Retention.Duration,
 		RouteGrace:           cfg.Routes.Grace.Duration,
 		RouteMinObservations: cfg.Routes.MinObservations,
-		MaxConnsPerIP:        cfg.WebSocket.MaxConnectionsPerIP,
-		ViewRefreshInterval:  cfg.Background.ViewRefresh.Duration,
-		ReconfirmInterval:    cfg.Background.Reconfirm.Duration,
-		CleanupInterval:      cfg.Background.Cleanup.Duration,
+		WebSocket: ResolvedWebSocketConfig{
+			MaxConnections:      cfg.WebSocket.MaxConnections,
+			MaxConnectionsPerIP: cfg.WebSocket.MaxConnectionsPerIP,
+			HandshakesPerMinute: cfg.WebSocket.HandshakesPerMinute,
+			TrustedProxyCIDRs:   append([]string(nil), cfg.WebSocket.TrustedProxyCIDRs...),
+		},
+		ViewRefreshInterval: cfg.Background.ViewRefresh.Duration,
+		ReconfirmInterval:   cfg.Background.Reconfirm.Duration,
+		CleanupInterval:     cfg.Background.Cleanup.Duration,
 
 		PresenceFlushInterval: cfg.Presence.FlushInterval.Duration,
 		PresencePacketTTL:     cfg.Presence.PacketTTL.Duration,
@@ -352,8 +387,14 @@ func Resolve(cfg *Config) ResolvedConfig {
 	if r.RouteMinObservations == 0 {
 		r.RouteMinObservations = 3
 	}
-	if r.MaxConnsPerIP == 0 {
-		r.MaxConnsPerIP = 5
+	if r.WebSocket.MaxConnections <= 0 {
+		r.WebSocket.MaxConnections = 1000
+	}
+	if r.WebSocket.MaxConnectionsPerIP <= 0 {
+		r.WebSocket.MaxConnectionsPerIP = 50
+	}
+	if r.WebSocket.HandshakesPerMinute <= 0 {
+		r.WebSocket.HandshakesPerMinute = 5
 	}
 	if r.ViewRefreshInterval == 0 {
 		r.ViewRefreshInterval = time.Hour
@@ -386,9 +427,10 @@ func Resolve(cfg *Config) ResolvedConfig {
 
 func (r ResolvedConfig) String() string {
 	return fmt.Sprintf(
-		"telemetryResolution=%s telemetryRetention=%s packetRetention=%s routeRetention=%s routeGrace=%s routeMinObs=%d maxConnsPerIP=%d viewRefresh=%s reconfirm=%s cleanup=%s presenceFlush=%s presencePacketTTL=%s clockDriftThreshold=%s nodeStaleThreshold=%s nodeDeleteAfter=%s",
+		"telemetryResolution=%s telemetryRetention=%s packetRetention=%s routeRetention=%s routeGrace=%s routeMinObs=%d wsMaxConnections=%d wsMaxConnsPerIP=%d wsHandshakesPerMinute=%d wsTrustedProxyCIDRs=%d viewRefresh=%s reconfirm=%s cleanup=%s presenceFlush=%s presencePacketTTL=%s clockDriftThreshold=%s nodeStaleThreshold=%s nodeDeleteAfter=%s",
 		r.TelemetryResolution, r.TelemetryRetention, r.PacketRetention, r.RouteRetention, r.RouteGrace, r.RouteMinObservations,
-		r.MaxConnsPerIP, r.ViewRefreshInterval, r.ReconfirmInterval, r.CleanupInterval,
+		r.WebSocket.MaxConnections, r.WebSocket.MaxConnectionsPerIP, r.WebSocket.HandshakesPerMinute, len(r.WebSocket.TrustedProxyCIDRs),
+		r.ViewRefreshInterval, r.ReconfirmInterval, r.CleanupInterval,
 		r.PresenceFlushInterval, r.PresencePacketTTL, r.ClockDriftThreshold,
 		r.NodeStaleThreshold, r.NodeDeleteAfter,
 	)

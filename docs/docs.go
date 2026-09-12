@@ -4,11 +4,11 @@ package docs
 import "github.com/swaggo/swag"
 
 const docTemplate = `{
-    "schemes": [[ marshal .Schemes ]],
+    "schemes": {{ marshal .Schemes }},
     "swagger": "2.0",
     "info": {
-        "description": "[[escape .Description]]",
-        "title": "[[.Title]]",
+        "description": "{{escape .Description}}",
+        "title": "{{.Title}}",
         "termsOfService": "https://github.com/MeshCore-Beacon/beacon-server",
         "contact": {
             "name": "MeshCore Beacon",
@@ -17,10 +17,10 @@ const docTemplate = `{
         "license": {
             "name": "AGPL-3-or-later"
         },
-        "version": "[[.Version]]"
+        "version": "{{.Version}}"
     },
-    "host": "[[.Host]]",
-    "basePath": "[[.BasePath]]",
+    "host": "{{.Host}}",
+    "basePath": "{{.BasePath}}",
     "paths": {
         "/brokers": {
             "get": {
@@ -80,7 +80,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "Max results (default 50)",
+                        "description": "Max results (default 20, max 100)",
                         "name": "limit",
                         "in": "query"
                     }
@@ -202,7 +202,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "Max results (default 50)",
+                        "description": "Max results (default 20, max 100)",
                         "name": "limit",
                         "in": "query"
                     }
@@ -388,7 +388,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "Max results (default 50)",
+                        "description": "Max results (default 20, max 100)",
                         "name": "limit",
                         "in": "query"
                     }
@@ -458,7 +458,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "Max results (default 100)",
+                        "description": "Max results (default 20, max 100)",
                         "name": "limit",
                         "in": "query"
                     }
@@ -584,7 +584,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "Max results (default 50)",
+                        "description": "Max results (default 20, max 100)",
                         "name": "limit",
                         "in": "query"
                     }
@@ -593,7 +593,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_NodeSummary"
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_PublicNodeSummary"
                         }
                     },
                     "400": {
@@ -633,7 +633,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.Node"
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PublicNode"
                         }
                     },
                     "400": {
@@ -675,7 +675,7 @@ const docTemplate = `{
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.NodeNeighbor"
+                                "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PublicNodeNeighbor"
                             }
                         }
                     },
@@ -719,7 +719,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "Max results (default 50)",
+                        "description": "Max results (default 20, max 100)",
                         "name": "limit",
                         "in": "query"
                     }
@@ -728,7 +728,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_PacketObservationSummary"
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_PublicPacketObservationSummary"
                         }
                     },
                     "400": {
@@ -818,7 +818,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "Max results (default 50)",
+                        "description": "Max results (default 20, max 100)",
                         "name": "limit",
                         "in": "query"
                     }
@@ -827,7 +827,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_ObserverSummary"
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_PublicObserverSummary"
                         }
                     },
                     "400": {
@@ -867,7 +867,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.Observer"
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PublicObserver"
                         }
                     },
                     "400": {
@@ -910,7 +910,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "Max results (default 50)",
+                        "description": "Max results (default 20, max 100)",
                         "name": "limit",
                         "in": "query"
                     }
@@ -919,7 +919,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_AdvertObservation"
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_PublicAdvertObservation"
                         }
                     },
                     "400": {
@@ -1091,7 +1091,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "Max results (default 50)",
+                        "description": "Max results (default 20, max 100)",
                         "name": "limit",
                         "in": "query"
                     }
@@ -1100,7 +1100,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "type": "object"
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_PublicPacketSummary"
                         }
                     },
                     "400": {
@@ -1179,7 +1179,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "Max results (default 100)",
+                        "description": "Max results (default 20, max 100)",
                         "name": "limit",
                         "in": "query"
                     }
@@ -1190,7 +1190,7 @@ const docTemplate = `{
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PacketSummary"
+                                "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PublicPacketSummary"
                             }
                         }
                     },
@@ -1231,7 +1231,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.Packet"
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PublicPacket"
                         }
                     },
                     "400": {
@@ -1353,7 +1353,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "Max results (default 50)",
+                        "description": "Max results (default 20, max 100)",
                         "name": "limit",
                         "in": "query"
                     }
@@ -1613,7 +1613,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "Max results (default 10)",
+                        "description": "Max results (default 20, max 100)",
                         "name": "limit",
                         "in": "query"
                     }
@@ -1956,7 +1956,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "Max results (default 10)",
+                        "description": "Max results (default 20, max 100)",
                         "name": "limit",
                         "in": "query"
                     }
@@ -2010,7 +2010,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "Max results (default 10)",
+                        "description": "Max results (default 20, max 100)",
                         "name": "limit",
                         "in": "query"
                     }
@@ -2070,7 +2070,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "Max results (default 10)",
+                        "description": "Max results (default 20, max 100)",
                         "name": "limit",
                         "in": "query"
                     }
@@ -2130,7 +2130,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "Max results (default 10)",
+                        "description": "Max results (default 20, max 100)",
                         "name": "limit",
                         "in": "query"
                     }
@@ -2214,7 +2214,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "Max results (default 50)",
+                        "description": "Max results (default 20, max 100)",
                         "name": "limit",
                         "in": "query"
                     }
@@ -2280,48 +2280,6 @@ const docTemplate = `{
         }
     },
     "definitions": {
-        "github_com_MeshCore-Beacon_beacon-server_internal_api.AdvertObservation": {
-            "type": "object",
-            "properties": {
-                "heardAt": {
-                    "description": "epoch ms",
-                    "type": "integer"
-                },
-                "hopCount": {
-                    "type": "integer"
-                },
-                "iata": {
-                    "type": "string"
-                },
-                "id": {
-                    "description": "observation ID, use as cursor for pagination",
-                    "type": "integer"
-                },
-                "nodeName": {
-                    "type": "string"
-                },
-                "nodePublicKey": {
-                    "description": "hex-encoded",
-                    "type": "string"
-                },
-                "packetHash": {
-                    "description": "hex-encoded",
-                    "type": "string"
-                },
-                "payloadType": {
-                    "type": "integer"
-                },
-                "payloadTypeName": {
-                    "type": "string"
-                },
-                "rssi": {
-                    "type": "integer"
-                },
-                "snr": {
-                    "type": "number"
-                }
-            }
-        },
         "github_com_MeshCore-Beacon_beacon-server_internal_api.Channel": {
             "type": "object",
             "properties": {
@@ -2562,120 +2520,6 @@ const docTemplate = `{
                 }
             }
         },
-        "github_com_MeshCore-Beacon_beacon-server_internal_api.Node": {
-            "type": "object",
-            "properties": {
-                "clockCheckedAt": {
-                    "type": "integer"
-                },
-                "clockDriftSeconds": {
-                    "description": "Clock drift, repeaters/room servers only (nodeType 2/3); omitted entirely for other\nnode types or when no qualifying advert has been measured yet. Device minus server\ntime, in seconds, from the advert's self-reported timestamp: +ve = device ahead.\nclockCheckedAt is the server receive time of the advert this was measured from (same\nmoment as lastAdvertAt). clockOutOfSync is |clockDriftSeconds| exceeding a configured\nthreshold (default 5m) -- see internal/config.ResolvedConfig.ClockDriftThreshold.",
-                    "type": "integer"
-                },
-                "clockOutOfSync": {
-                    "type": "boolean"
-                },
-                "defaultScope": {
-                    "description": "most recently matched transport scope name e.g. \"#bc\"",
-                    "type": "string"
-                },
-                "firstSeen": {
-                    "description": "epoch ms",
-                    "type": "integer"
-                },
-                "iatas": {
-                    "description": "IATAs where this node has been heard, with last heard timestamps",
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.NodeIATA"
-                    }
-                },
-                "id": {
-                    "type": "string"
-                },
-                "isObserver": {
-                    "description": "true if this node is also a known observer",
-                    "type": "boolean"
-                },
-                "knownNeighborCount": {
-                    "type": "integer"
-                },
-                "lastAdvertAt": {
-                    "description": "epoch ms, nil if no advert received",
-                    "type": "integer"
-                },
-                "lastSeen": {
-                    "description": "epoch ms",
-                    "type": "integer"
-                },
-                "lat": {
-                    "description": "decimal degrees, from advert AppData",
-                    "type": "number"
-                },
-                "lng": {
-                    "description": "decimal degrees, from advert AppData",
-                    "type": "number"
-                },
-                "locationSource": {
-                    "description": "\"advert\" or \"manual\"",
-                    "type": "string"
-                },
-                "metadata": {
-                    "description": "raw JSONB metadata"
-                },
-                "minFirmwareVersion": {
-                    "description": "derived from capability flags",
-                    "type": "string"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "neighborIds": {
-                    "description": "only populated when the list request opts in; see ?neighbors=true",
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "neighbors": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.NodeNeighbor"
-                    }
-                },
-                "nodeType": {
-                    "description": "1=companion, 2=repeater, 3=room_server, 4=sensor",
-                    "type": "integer"
-                },
-                "nodeTypeName": {
-                    "type": "string"
-                },
-                "observerId": {
-                    "description": "UUID of the associated observer row, if any",
-                    "type": "string"
-                },
-                "publicKey": {
-                    "description": "hex-encoded Ed25519 public key",
-                    "type": "string"
-                },
-                "radio": {
-                    "description": "shorthand: \"freqMhz,bwKhz,sf\" e.g. \"910.525,62.5,7\"",
-                    "type": "string"
-                },
-                "stale": {
-                    "description": "Stale is true when the node hasn't been seen (last_seen) within the configured\nstaleness window (default 24h; internal/config.ResolvedConfig.NodeStaleThreshold).\nApplies to every node type, unlike ClockDriftSeconds/ClockOutOfSync on Node, which\nare repeater/room-server only.",
-                    "type": "boolean"
-                },
-                "supportsMultibytePaths": {
-                    "description": "firmware \u003e= 1.14.0; detected via path hash size",
-                    "type": "boolean"
-                },
-                "supportsMultibyteTraces": {
-                    "description": "firmware \u003e= 1.11.0; detected via trace hash size",
-                    "type": "boolean"
-                }
-            }
-        },
         "github_com_MeshCore-Beacon_beacon-server_internal_api.NodeIATA": {
             "type": "object",
             "properties": {
@@ -2685,116 +2529,6 @@ const docTemplate = `{
                 "lastHeard": {
                     "description": "epoch ms",
                     "type": "integer"
-                }
-            }
-        },
-        "github_com_MeshCore-Beacon_beacon-server_internal_api.NodeNeighbor": {
-            "type": "object",
-            "properties": {
-                "firstSeen": {
-                    "description": "epoch ms",
-                    "type": "integer"
-                },
-                "iata": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "string"
-                },
-                "lastSeen": {
-                    "description": "epoch ms",
-                    "type": "integer"
-                },
-                "lat": {
-                    "type": "number"
-                },
-                "lng": {
-                    "type": "number"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "nodeType": {
-                    "type": "integer"
-                },
-                "nodeTypeName": {
-                    "type": "string"
-                },
-                "observationCount": {
-                    "type": "integer"
-                },
-                "publicKey": {
-                    "type": "string"
-                },
-                "snr": {
-                    "type": "number"
-                }
-            }
-        },
-        "github_com_MeshCore-Beacon_beacon-server_internal_api.NodeSummary": {
-            "type": "object",
-            "properties": {
-                "defaultScope": {
-                    "description": "most recently matched transport scope name e.g. \"#bc\"",
-                    "type": "string"
-                },
-                "iatas": {
-                    "description": "IATAs where this node has been heard, with last heard timestamps",
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.NodeIATA"
-                    }
-                },
-                "id": {
-                    "type": "string"
-                },
-                "isObserver": {
-                    "description": "true if this node is also a known observer",
-                    "type": "boolean"
-                },
-                "knownNeighborCount": {
-                    "type": "integer"
-                },
-                "lat": {
-                    "description": "decimal degrees, from advert AppData",
-                    "type": "number"
-                },
-                "lng": {
-                    "description": "decimal degrees, from advert AppData",
-                    "type": "number"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "neighborIds": {
-                    "description": "only populated when the list request opts in; see ?neighbors=true",
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "nodeType": {
-                    "description": "1=companion, 2=repeater, 3=room_server, 4=sensor",
-                    "type": "integer"
-                },
-                "nodeTypeName": {
-                    "type": "string"
-                },
-                "observerId": {
-                    "description": "UUID of the associated observer row, if any",
-                    "type": "string"
-                },
-                "publicKey": {
-                    "description": "hex-encoded Ed25519 public key",
-                    "type": "string"
-                },
-                "radio": {
-                    "description": "shorthand: \"freqMhz,bwKhz,sf\" e.g. \"910.525,62.5,7\"",
-                    "type": "string"
-                },
-                "stale": {
-                    "description": "Stale is true when the node hasn't been seen (last_seen) within the configured\nstaleness window (default 24h; internal/config.ResolvedConfig.NodeStaleThreshold).\nApplies to every node type, unlike ClockDriftSeconds/ClockOutOfSync on Node, which\nare repeater/room-server only.",
-                    "type": "boolean"
                 }
             }
         },
@@ -2830,157 +2564,6 @@ const docTemplate = `{
                 },
                 "uniquePackets": {
                     "type": "integer"
-                }
-            }
-        },
-        "github_com_MeshCore-Beacon_beacon-server_internal_api.Observer": {
-            "type": "object",
-            "properties": {
-                "batteryLevel": {
-                    "description": "volts, nil if mains powered",
-                    "type": "number"
-                },
-                "brokers": {
-                    "description": "broker names this observer has been seen on",
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ObserverBroker"
-                    }
-                },
-                "displayName": {
-                    "description": "friendly name from /status messages",
-                    "type": "string"
-                },
-                "firmwareBuild": {
-                    "type": "string"
-                },
-                "firmwareVersion": {
-                    "type": "string"
-                },
-                "firstSeen": {
-                    "description": "epoch ms",
-                    "type": "integer"
-                },
-                "hardwareModel": {
-                    "type": "string"
-                },
-                "iata": {
-                    "description": "most recently heard IATA",
-                    "type": "string"
-                },
-                "id": {
-                    "type": "string"
-                },
-                "lastSeen": {
-                    "description": "epoch ms",
-                    "type": "integer"
-                },
-                "lastStatusAt": {
-                    "description": "epoch ms",
-                    "type": "integer"
-                },
-                "observationCount": {
-                    "type": "integer"
-                },
-                "observerType": {
-                    "description": "e.g. \"meshcoretomqtt\", \"meshcoreha\"",
-                    "type": "string"
-                },
-                "publicKey": {
-                    "description": "hex-encoded public key",
-                    "type": "string"
-                },
-                "radio": {
-                    "description": "friendly radio param string: freqMhz,BwKhz,SF e.g. \"910.525,62.5,7\"",
-                    "type": "string"
-                },
-                "radioBwKhz": {
-                    "description": "bandwidth in kHz",
-                    "type": "number"
-                },
-                "radioCr": {
-                    "description": "coding rate denominator",
-                    "type": "integer"
-                },
-                "radioFreqMhz": {
-                    "description": "MHz e.g. 910.525",
-                    "type": "number"
-                },
-                "radioSf": {
-                    "description": "LoRa spreading factor",
-                    "type": "integer"
-                },
-                "scopes": {
-                    "description": "list of observer forwarded scopes matched to config",
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "softwareVersion": {
-                    "type": "string"
-                },
-                "status": {
-                    "description": "\"online\" or \"offline\" derived from last_status_at",
-                    "type": "string"
-                },
-                "statusMetadata": {
-                    "description": "raw /status JSON payload"
-                },
-                "uptimeSeconds": {
-                    "type": "integer"
-                }
-            }
-        },
-        "github_com_MeshCore-Beacon_beacon-server_internal_api.ObserverBroker": {
-            "type": "object",
-            "properties": {
-                "lastPacketAt": {
-                    "description": "epoch ms, last packet received via this broker; 0 if none",
-                    "type": "integer"
-                },
-                "lastSeenAt": {
-                    "description": "epoch ms, last time observer was seen on this broker",
-                    "type": "integer"
-                },
-                "name": {
-                    "description": "broker name e.g. \"mqtt1\"",
-                    "type": "string"
-                }
-            }
-        },
-        "github_com_MeshCore-Beacon_beacon-server_internal_api.ObserverSummary": {
-            "type": "object",
-            "properties": {
-                "displayName": {
-                    "description": "friendly name from /status messages",
-                    "type": "string"
-                },
-                "iata": {
-                    "description": "most recently heard IATA",
-                    "type": "string"
-                },
-                "id": {
-                    "type": "string"
-                },
-                "observerType": {
-                    "description": "e.g. \"meshcoretomqtt\", \"meshcoreha\"",
-                    "type": "string"
-                },
-                "radio": {
-                    "description": "friendly radio param string: freqMhz,BwKhz,SF e.g. \"910.525,62.5,7\"",
-                    "type": "string"
-                },
-                "scopes": {
-                    "description": "list of observer forwarded scopes matched to config",
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "status": {
-                    "description": "\"online\" or \"offline\" derived from last_status_at",
-                    "type": "string"
                 }
             }
         },
@@ -3031,74 +2614,6 @@ const docTemplate = `{
                 }
             }
         },
-        "github_com_MeshCore-Beacon_beacon-server_internal_api.Packet": {
-            "type": "object",
-            "properties": {
-                "channelHash": {
-                    "description": "hex-encoded single byte; non-nil for group_text/group_data",
-                    "type": "string"
-                },
-                "decrypted": {
-                    "description": "true if group text was successfully decrypted",
-                    "type": "boolean"
-                },
-                "firstHeardAt": {
-                    "description": "epoch ms",
-                    "type": "integer"
-                },
-                "firstToLastMs": {
-                    "description": "ms between first and last observation",
-                    "type": "integer"
-                },
-                "header": {
-                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PacketHeader"
-                },
-                "lastHeardAt": {
-                    "description": "epoch ms",
-                    "type": "integer"
-                },
-                "observationCount": {
-                    "type": "integer"
-                },
-                "observations": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PacketObservationDetail"
-                    }
-                },
-                "originPubkey": {
-                    "description": "hex-encoded; nil when not extractable from payload",
-                    "type": "string"
-                },
-                "packetHash": {
-                    "type": "string"
-                },
-                "parsedPayload": {
-                    "type": "array",
-                    "items": {
-                        "type": "integer"
-                    }
-                },
-                "rawPayload": {
-                    "description": "hex-encoded payload bytes (excludes header and path)",
-                    "type": "string"
-                },
-                "resolvedRoute": {
-                    "description": "trace packets only: resolved intended route",
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ResolvedHop"
-                    }
-                },
-                "scope": {
-                    "description": "matched transport scope name e.g. \"#bc\"",
-                    "type": "string"
-                },
-                "transportCodes": {
-                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PacketTransportCodes"
-                }
-            }
-        },
         "github_com_MeshCore-Beacon_beacon-server_internal_api.PacketHeader": {
             "type": "object",
             "properties": {
@@ -3128,141 +2643,6 @@ const docTemplate = `{
                 }
             }
         },
-        "github_com_MeshCore-Beacon_beacon-server_internal_api.PacketLatestObserver": {
-            "type": "object",
-            "properties": {
-                "displayName": {
-                    "type": "string"
-                },
-                "iata": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "string"
-                },
-                "pathBytes": {
-                    "description": "hex-encoded accumulated path hashes",
-                    "type": "string"
-                },
-                "pathLength": {
-                    "description": "PathLength/PathBytes are cheap -- already-stored columns on packet_observations -- and\npopulated everywhere PacketLatestObserver appears: the REST list/backfill endpoints and\nthe WS feed alike. ResolvedPath/ResolvedSource/ResolvedDestination require a per-hash DB\nresolution lookup; they're populated on the WS feed (already computed once at ingest, so\neffectively free there) but deliberately left nil on the REST endpoints, which are\npaginated/high-volume and used only for scrollback and reconnect-gap backfill -- full\nresolution stays a GET /packets/{packetHash}-only feature.",
-                    "allOf": [
-                        {
-                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PacketPathLength"
-                        }
-                    ]
-                },
-                "resolvedDestination": {
-                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ResolvedHop"
-                },
-                "resolvedPath": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ResolvedHop"
-                    }
-                },
-                "resolvedSource": {
-                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ResolvedHop"
-                }
-            }
-        },
-        "github_com_MeshCore-Beacon_beacon-server_internal_api.PacketObservationDetail": {
-            "type": "object",
-            "properties": {
-                "heardAt": {
-                    "description": "epoch ms",
-                    "type": "integer"
-                },
-                "iata": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "integer"
-                },
-                "observerId": {
-                    "type": "string"
-                },
-                "observerName": {
-                    "type": "string"
-                },
-                "pathBytes": {
-                    "description": "hex-encoded accumulated path hashes",
-                    "type": "string"
-                },
-                "pathLength": {
-                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PacketPathLength"
-                },
-                "propagationTimeMs": {
-                    "description": "ms since first observation; 0 for first",
-                    "type": "integer"
-                },
-                "radio": {
-                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PacketRadio"
-                },
-                "resolvedDestination": {
-                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ResolvedHop"
-                },
-                "resolvedPath": {
-                    "description": "per-observation resolved path hashes",
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ResolvedHop"
-                    }
-                },
-                "resolvedSource": {
-                    "description": "ResolvedSource/ResolvedDestination are the packet's endpoints, when the payload type\ncarries a resolvable one: an exact match for ADVERT's full pubkey, an ambiguous\nhash-prefix match (like intermediate hops) for TEXT_MESSAGE/PATH/ANON_REQ's 1-byte\nsource/destination hashes. Nil when the payload type doesn't carry one at all (e.g.\nGRP_TXT/GRP_DATA/TRACE aren't node-to-node addressed) -- see BuildResolvedPath and\nResolveExactNode for how each is built.",
-                    "allOf": [
-                        {
-                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ResolvedHop"
-                        }
-                    ]
-                },
-                "rssi": {
-                    "type": "integer"
-                },
-                "snr": {
-                    "type": "number"
-                },
-                "sourceBroker": {
-                    "type": "string"
-                }
-            }
-        },
-        "github_com_MeshCore-Beacon_beacon-server_internal_api.PacketObservationSummary": {
-            "type": "object",
-            "properties": {
-                "heardAt": {
-                    "description": "epoch ms",
-                    "type": "integer"
-                },
-                "hopCount": {
-                    "type": "integer"
-                },
-                "iata": {
-                    "type": "string"
-                },
-                "id": {
-                    "description": "observation ID, use as cursor for pagination",
-                    "type": "integer"
-                },
-                "packetHash": {
-                    "description": "hex-encoded",
-                    "type": "string"
-                },
-                "payloadType": {
-                    "type": "integer"
-                },
-                "payloadTypeName": {
-                    "type": "string"
-                },
-                "rssi": {
-                    "type": "integer"
-                },
-                "snr": {
-                    "type": "number"
-                }
-            }
-        },
         "github_com_MeshCore-Beacon_beacon-server_internal_api.PacketPathLength": {
             "type": "object",
             "properties": {
@@ -3280,66 +2660,6 @@ const docTemplate = `{
                 }
             }
         },
-        "github_com_MeshCore-Beacon_beacon-server_internal_api.PacketRadio": {
-            "type": "object",
-            "properties": {
-                "bandwidthKhz": {
-                    "type": "number"
-                },
-                "codingRate": {
-                    "type": "integer"
-                },
-                "freqMhz": {
-                    "type": "number"
-                },
-                "spreadFactor": {
-                    "type": "integer"
-                }
-            }
-        },
-        "github_com_MeshCore-Beacon_beacon-server_internal_api.PacketSummary": {
-            "type": "object",
-            "properties": {
-                "firstHeardAt": {
-                    "description": "epoch ms",
-                    "type": "integer"
-                },
-                "lastHeardAt": {
-                    "description": "epoch ms",
-                    "type": "integer"
-                },
-                "latestObserver": {
-                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PacketLatestObserver"
-                },
-                "observationCount": {
-                    "type": "integer"
-                },
-                "packetHash": {
-                    "description": "hex-encoded",
-                    "type": "string"
-                },
-                "payloadType": {
-                    "type": "integer"
-                },
-                "payloadTypeName": {
-                    "type": "string"
-                },
-                "routeType": {
-                    "type": "integer"
-                },
-                "routeTypeName": {
-                    "type": "string"
-                },
-                "scope": {
-                    "description": "matched transport scope name e.g. \"#bc\"",
-                    "type": "string"
-                },
-                "summary": {
-                    "description": "human-readable payload summary",
-                    "type": "string"
-                }
-            }
-        },
         "github_com_MeshCore-Beacon_beacon-server_internal_api.PacketTransportCodes": {
             "type": "object",
             "properties": {
@@ -3347,23 +2667,6 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "subRegionCode": {
-                    "type": "integer"
-                }
-            }
-        },
-        "github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_AdvertObservation": {
-            "type": "object",
-            "properties": {
-                "hasMore": {
-                    "type": "boolean"
-                },
-                "items": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.AdvertObservation"
-                    }
-                },
-                "nextCursor": {
                     "type": "integer"
                 }
             }
@@ -3385,7 +2688,7 @@ const docTemplate = `{
                 }
             }
         },
-        "github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_NodeSummary": {
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_PublicAdvertObservation": {
             "type": "object",
             "properties": {
                 "hasMore": {
@@ -3394,7 +2697,7 @@ const docTemplate = `{
                 "items": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.NodeSummary"
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PublicAdvertObservation"
                     }
                 },
                 "nextCursor": {
@@ -3402,7 +2705,7 @@ const docTemplate = `{
                 }
             }
         },
-        "github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_ObserverSummary": {
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_PublicNodeSummary": {
             "type": "object",
             "properties": {
                 "hasMore": {
@@ -3411,7 +2714,7 @@ const docTemplate = `{
                 "items": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ObserverSummary"
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PublicNodeSummary"
                     }
                 },
                 "nextCursor": {
@@ -3419,7 +2722,7 @@ const docTemplate = `{
                 }
             }
         },
-        "github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_PacketObservationSummary": {
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_PublicObserverSummary": {
             "type": "object",
             "properties": {
                 "hasMore": {
@@ -3428,7 +2731,41 @@ const docTemplate = `{
                 "items": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PacketObservationSummary"
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PublicObserverSummary"
+                    }
+                },
+                "nextCursor": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_PublicPacketObservationSummary": {
+            "type": "object",
+            "properties": {
+                "hasMore": {
+                    "type": "boolean"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PublicPacketObservationSummary"
+                    }
+                },
+                "nextCursor": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_PublicPacketSummary": {
+            "type": "object",
+            "properties": {
+                "hasMore": {
+                    "type": "boolean"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PublicPacketSummary"
                     }
                 },
                 "nextCursor": {
@@ -3446,6 +2783,518 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "payloadTypeName": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.PublicAdvertObservation": {
+            "type": "object",
+            "properties": {
+                "heardAt": {
+                    "type": "integer"
+                },
+                "hopCount": {
+                    "type": "integer"
+                },
+                "iata": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "nodeName": {
+                    "type": "string"
+                },
+                "nodePublicKey": {
+                    "type": "string"
+                },
+                "packetHash": {
+                    "type": "string"
+                },
+                "payloadType": {
+                    "type": "integer"
+                },
+                "payloadTypeName": {
+                    "type": "string"
+                },
+                "rssi": {
+                    "type": "integer"
+                },
+                "snr": {
+                    "type": "number"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.PublicNode": {
+            "type": "object",
+            "properties": {
+                "clockCheckedAt": {
+                    "type": "integer"
+                },
+                "clockDriftSeconds": {
+                    "type": "integer"
+                },
+                "clockOutOfSync": {
+                    "type": "boolean"
+                },
+                "defaultScope": {
+                    "type": "string"
+                },
+                "firstSeen": {
+                    "type": "integer"
+                },
+                "iatas": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PublicNodeIATA"
+                    }
+                },
+                "id": {
+                    "type": "string"
+                },
+                "isObserver": {
+                    "type": "boolean"
+                },
+                "knownNeighborCount": {
+                    "type": "integer"
+                },
+                "lastAdvertAt": {
+                    "type": "integer"
+                },
+                "lastSeen": {
+                    "type": "integer"
+                },
+                "lat": {
+                    "type": "number"
+                },
+                "lng": {
+                    "type": "number"
+                },
+                "locationSource": {
+                    "type": "string"
+                },
+                "minFirmwareVersion": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "neighborIds": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "neighbors": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PublicNodeNeighbor"
+                    }
+                },
+                "nodeType": {
+                    "type": "integer"
+                },
+                "nodeTypeName": {
+                    "type": "string"
+                },
+                "observerId": {
+                    "type": "string"
+                },
+                "publicKey": {
+                    "type": "string"
+                },
+                "radio": {
+                    "type": "string"
+                },
+                "stale": {
+                    "type": "boolean"
+                },
+                "supportsMultibytePaths": {
+                    "type": "boolean"
+                },
+                "supportsMultibyteTraces": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.PublicNodeIATA": {
+            "type": "object",
+            "properties": {
+                "iata": {
+                    "type": "string"
+                },
+                "lastHeard": {
+                    "description": "epoch ms",
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.PublicNodeNeighbor": {
+            "type": "object",
+            "properties": {
+                "firstSeen": {
+                    "description": "epoch ms",
+                    "type": "integer"
+                },
+                "iata": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "lastSeen": {
+                    "description": "epoch ms",
+                    "type": "integer"
+                },
+                "lat": {
+                    "type": "number"
+                },
+                "lng": {
+                    "type": "number"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "nodeType": {
+                    "type": "integer"
+                },
+                "nodeTypeName": {
+                    "type": "string"
+                },
+                "observationCount": {
+                    "type": "integer"
+                },
+                "publicKey": {
+                    "type": "string"
+                },
+                "snr": {
+                    "type": "number"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.PublicNodeSummary": {
+            "type": "object",
+            "properties": {
+                "defaultScope": {
+                    "type": "string"
+                },
+                "iatas": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PublicNodeIATA"
+                    }
+                },
+                "id": {
+                    "type": "string"
+                },
+                "isObserver": {
+                    "type": "boolean"
+                },
+                "knownNeighborCount": {
+                    "type": "integer"
+                },
+                "lat": {
+                    "type": "number"
+                },
+                "lng": {
+                    "type": "number"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "neighborIds": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "nodeType": {
+                    "type": "integer"
+                },
+                "nodeTypeName": {
+                    "type": "string"
+                },
+                "observerId": {
+                    "type": "string"
+                },
+                "publicKey": {
+                    "type": "string"
+                },
+                "radio": {
+                    "type": "string"
+                },
+                "stale": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.PublicObserver": {
+            "type": "object",
+            "properties": {
+                "batteryLevel": {
+                    "type": "number"
+                },
+                "brokers": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PublicObserverBroker"
+                    }
+                },
+                "displayName": {
+                    "type": "string"
+                },
+                "firmwareBuild": {
+                    "type": "string"
+                },
+                "firmwareVersion": {
+                    "type": "string"
+                },
+                "firstSeen": {
+                    "type": "integer"
+                },
+                "hardwareModel": {
+                    "type": "string"
+                },
+                "iata": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "lastSeen": {
+                    "type": "integer"
+                },
+                "lastStatusAt": {
+                    "type": "integer"
+                },
+                "observationCount": {
+                    "type": "integer"
+                },
+                "observerType": {
+                    "type": "string"
+                },
+                "publicKey": {
+                    "type": "string"
+                },
+                "radio": {
+                    "type": "string"
+                },
+                "radioBwKhz": {
+                    "type": "number"
+                },
+                "radioCr": {
+                    "type": "integer"
+                },
+                "radioFreqMhz": {
+                    "type": "number"
+                },
+                "radioSf": {
+                    "type": "integer"
+                },
+                "scopes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "softwareVersion": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "uptimeSeconds": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.PublicObserverBroker": {
+            "type": "object",
+            "properties": {
+                "lastPacketAt": {
+                    "description": "epoch ms, 0 if none",
+                    "type": "integer"
+                },
+                "lastSeenAt": {
+                    "description": "epoch ms",
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.PublicObserverSummary": {
+            "type": "object",
+            "properties": {
+                "displayName": {
+                    "type": "string"
+                },
+                "iata": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "observerType": {
+                    "type": "string"
+                },
+                "radio": {
+                    "type": "string"
+                },
+                "scopes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.PublicPacket": {
+            "type": "object",
+            "properties": {
+                "channelHash": {
+                    "type": "string"
+                },
+                "decrypted": {
+                    "type": "boolean"
+                },
+                "firstHeardAt": {
+                    "type": "integer"
+                },
+                "firstToLastMs": {
+                    "type": "integer"
+                },
+                "header": {
+                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PacketHeader"
+                },
+                "lastHeardAt": {
+                    "type": "integer"
+                },
+                "observationCount": {
+                    "type": "integer"
+                },
+                "originPubkey": {
+                    "type": "string"
+                },
+                "packetHash": {
+                    "type": "string"
+                },
+                "resolvedRoute": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ResolvedHop"
+                    }
+                },
+                "scope": {
+                    "type": "string"
+                },
+                "transportCodes": {
+                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PacketTransportCodes"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.PublicPacketLatestObserver": {
+            "type": "object",
+            "properties": {
+                "displayName": {
+                    "type": "string"
+                },
+                "iata": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "pathBytes": {
+                    "type": "string"
+                },
+                "pathLength": {
+                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PacketPathLength"
+                },
+                "resolvedDestination": {
+                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ResolvedHop"
+                },
+                "resolvedPath": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ResolvedHop"
+                    }
+                },
+                "resolvedSource": {
+                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ResolvedHop"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.PublicPacketObservationSummary": {
+            "type": "object",
+            "properties": {
+                "heardAt": {
+                    "type": "integer"
+                },
+                "hopCount": {
+                    "type": "integer"
+                },
+                "iata": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "packetHash": {
+                    "type": "string"
+                },
+                "payloadType": {
+                    "type": "integer"
+                },
+                "payloadTypeName": {
+                    "type": "string"
+                },
+                "rssi": {
+                    "type": "integer"
+                },
+                "snr": {
+                    "type": "number"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.PublicPacketSummary": {
+            "type": "object",
+            "properties": {
+                "firstHeardAt": {
+                    "type": "integer"
+                },
+                "lastHeardAt": {
+                    "type": "integer"
+                },
+                "latestObserver": {
+                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PublicPacketLatestObserver"
+                },
+                "observationCount": {
+                    "type": "integer"
+                },
+                "packetHash": {
+                    "type": "string"
+                },
+                "payloadType": {
+                    "type": "integer"
+                },
+                "payloadTypeName": {
+                    "type": "string"
+                },
+                "routeType": {
+                    "type": "integer"
+                },
+                "routeTypeName": {
+                    "type": "string"
+                },
+                "scope": {
+                    "type": "string"
+                },
+                "summary": {
                     "type": "string"
                 }
             }
@@ -3936,8 +3785,8 @@ var SwaggerInfo = &swag.Spec{
 	Description:      "MeshCore network observation backend. Ingests LoRa packets from MQTT brokers, stores in PostgreSQL, and streams live events via WebSocket.",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
-	LeftDelim:        "[[",
-	RightDelim:       "]]",
+	LeftDelim:        "{{",
+	RightDelim:       "}}",
 }
 
 func init() {

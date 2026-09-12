@@ -98,6 +98,10 @@ func (s *Store) SetNodeDefaultScope(ctx context.Context, nodeID uuid.UUID, scope
 }
 
 func (s *Store) ListNodes(ctx context.Context, nodeType int16, iatas []string, supportsMultibytePaths, supportsMultibyteTraces *bool, pubkey []byte, pubkeyPrefix, name, scope string, cursor int64, limit int32, includeNeighbors bool) (api.Page[api.NodeSummary], error) {
+	limit = clampQueryLimit(limit)
+	ctx, cancel := withStatementTimeout(ctx)
+	defer cancel()
+
 	var cursorTS pgtype.Timestamptz
 	if cursor > 0 {
 		cursorTS = pgtype.Timestamptz{Time: time.UnixMilli(cursor), Valid: true}
@@ -110,7 +114,7 @@ func (s *Store) ListNodes(ctx context.Context, nodeType int16, iatas []string, s
 		Column5:  pubkey,
 		Column6:  name,
 		Column7:  cursorTS,
-		Limit:    limit + 1,
+		Limit:    limit,
 		Column9:  scope,
 		Column10: includeNeighbors,
 		Column11: pubkeyPrefix,
@@ -118,10 +122,7 @@ func (s *Store) ListNodes(ctx context.Context, nodeType int16, iatas []string, s
 	if err != nil {
 		return api.Page[api.NodeSummary]{}, err
 	}
-	hasMore := len(rows) > int(limit)
-	if hasMore {
-		rows = rows[:limit]
-	}
+	hasMore := len(rows) == int(limit)
 	items := make([]api.NodeSummary, 0, len(rows))
 	for _, v := range rows {
 		node := api.NodeSummary{

@@ -49,8 +49,8 @@ func NodesRouter(reader api.Reader) http.Handler {
 //	@Param		supportsMultibyteTraces	query		bool	false	"Filter by multibyte trace support (true/false); omit for no filter"
 //	@Param		neighbors				query		bool	false	"Include each node's known neighbor IDs (neighborIds field). Bare ?neighbors or ?neighbors=true enables it; omit/false for none"
 //	@Param		cursor					query		int		false	"last_seen epoch ms of last item for pagination"
-//	@Param		limit					query		int		false	"Max results (default 50)"
-//	@Success	200						{object}	api.Page[api.NodeSummary]
+//	@Param		limit					query		int		false	"Max results (default 20, max 100)"
+//	@Success	200						{object}	api.Page[api.PublicNodeSummary]
 //	@Failure	400						{object}	handlers.APIError
 //	@Failure	500						{object}	handlers.APIError
 //	@Router		/nodes [get]
@@ -67,14 +67,10 @@ func listNodes(reader api.Reader) http.HandlerFunc {
 		} else if typeName := r.URL.Query().Get("typeName"); typeName != "" {
 			nodeType = api.NodeTypeFromString(typeName)
 		}
-		var limit int32 = 50
-		if limitParam := r.URL.Query().Get("limit"); limitParam != "" {
-			l, err := strconv.ParseInt(limitParam, 10, 32)
-			if err != nil {
-				respondError(w, http.StatusBadRequest, "limit must be an integer")
-				return
-			}
-			limit = int32(l)
+		limit, err := parseLimit(r)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, err.Error())
+			return
 		}
 		var cursor int64
 		if cursorParam := r.URL.Query().Get("cursor"); cursorParam != "" {
@@ -147,7 +143,7 @@ func listNodes(reader api.Reader) http.HandlerFunc {
 			respondError(w, http.StatusInternalServerError, "internal server error")
 			return
 		}
-		respond(w, http.StatusOK, nodes)
+		respond(w, http.StatusOK, api.ToPublicNodePage(nodes))
 	}
 }
 
@@ -157,7 +153,7 @@ func listNodes(reader api.Reader) http.HandlerFunc {
 //	@Tags		Nodes
 //	@Produce	json
 //	@Param		nodeId	path		string	true	"Node UUID"
-//	@Success	200		{object}	api.Node
+//	@Success	200		{object}	api.PublicNode
 //	@Failure	400		{object}	handlers.APIError
 //	@Failure	404		{object}	handlers.APIError
 //	@Router		/nodes/{nodeId} [get]
@@ -173,7 +169,7 @@ func getNode(reader api.Reader) http.HandlerFunc {
 			respondError(w, http.StatusNotFound, "node not found")
 			return
 		}
-		respond(w, http.StatusOK, node)
+		respond(w, http.StatusOK, api.ToPublicNode(node))
 	}
 }
 
@@ -184,8 +180,8 @@ func getNode(reader api.Reader) http.HandlerFunc {
 //	@Produce	json
 //	@Param		nodeId	path		string	true	"Node UUID"
 //	@Param		cursor	query		int		false	"Observation ID of last item for pagination"
-//	@Param		limit	query		int		false	"Max results (default 50)"
-//	@Success	200		{object}	api.Page[api.PacketObservationSummary]
+//	@Param		limit	query		int		false	"Max results (default 20, max 100)"
+//	@Success	200		{object}	api.Page[api.PublicPacketObservationSummary]
 //	@Failure	400		{object}	handlers.APIError
 //	@Failure	500		{object}	handlers.APIError
 //	@Router		/nodes/{nodeId}/observations [get]
@@ -205,21 +201,17 @@ func listNodeObservations(reader api.Reader) http.HandlerFunc {
 			}
 			cursor = c
 		}
-		var limit int32 = 50
-		if limitParam := r.URL.Query().Get("limit"); limitParam != "" {
-			l, err := strconv.ParseInt(limitParam, 10, 32)
-			if err != nil {
-				respondError(w, http.StatusBadRequest, "limit must be an integer")
-				return
-			}
-			limit = int32(l)
+		limit, err := parseLimit(r)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, err.Error())
+			return
 		}
 		observations, err := reader.ListNodeObservations(r.Context(), nodeID, cursor, limit)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "internal server error")
 			return
 		}
-		respond(w, http.StatusOK, observations)
+		respond(w, http.StatusOK, api.ToPublicPacketObservationPage(observations))
 	}
 }
 
@@ -229,7 +221,7 @@ func listNodeObservations(reader api.Reader) http.HandlerFunc {
 //	@Tags		Nodes
 //	@Produce	json
 //	@Param		nodeId	path		string	true	"Node UUID"
-//	@Success	200		{object}	[]api.NodeNeighbor
+//	@Success	200		{object}	[]api.PublicNodeNeighbor
 //	@Failure	400		{object}	handlers.APIError
 //	@Failure	500		{object}	handlers.APIError
 //	@Router		/nodes/{nodeId}/neighbors [get]
@@ -245,7 +237,7 @@ func listNodeNeighbors(reader api.Reader) http.HandlerFunc {
 			respondError(w, http.StatusInternalServerError, "internal server error")
 			return
 		}
-		respond(w, http.StatusOK, neighbors)
+		respond(w, http.StatusOK, api.ToPublicNodeNeighbors(neighbors))
 	}
 }
 

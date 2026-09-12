@@ -69,7 +69,7 @@ func TestListObservers_Pagination(t *testing.T) {
 	lastStatusAt := pgtype.Timestamptz{Time: time.UnixMilli(1700000000000), Valid: true}
 	observerID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
 
-	rows := make([]sqlc.ListObserversRow, 3)
+	rows := make([]sqlc.ListObserversRow, 2)
 	for i := range rows {
 		rows[i] = sqlc.ListObserversRow{
 			ID:           observerID,
@@ -416,7 +416,7 @@ func TestListObserverAdverts_Pagination(t *testing.T) {
 	observerID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
 	heardAt := pgtype.Timestamptz{Time: time.UnixMilli(1700000000000), Valid: true}
 
-	rows := make([]sqlc.ListObserverAdvertsRow, 3)
+	rows := make([]sqlc.ListObserverAdvertsRow, 2)
 	for i := range rows {
 		rows[i] = sqlc.ListObserverAdvertsRow{
 			ID:      int64(i + 1),

@@ -24,7 +24,7 @@ func TestListChannels_Empty(t *testing.T) {
 			ChannelHash: nil,
 			Iatas:       nil,
 			CursorTs:    pgtype.Timestamptz{},
-			PageLimit:   11,
+			PageLimit:   10,
 		}).
 		Return([]sqlc.Channel{}, nil)
 
@@ -49,8 +49,8 @@ func TestListChannels_Pagination(t *testing.T) {
 	keyKnown := true
 	lastSeen := pgtype.Timestamptz{Time: time.UnixMilli(1700000000000), Valid: true}
 
-	// return limit+1 rows to trigger HasMore
-	rows := make([]sqlc.Channel, 3)
+	// A full page conservatively signals that another page may exist.
+	rows := make([]sqlc.Channel, 2)
 	for i := range rows {
 		rows[i] = sqlc.Channel{
 			ID:          int32(i + 1),
@@ -66,7 +66,7 @@ func TestListChannels_Pagination(t *testing.T) {
 			ChannelHash: nil,
 			Iatas:       nil,
 			CursorTs:    pgtype.Timestamptz{},
-			PageLimit:   3, // limit+1
+			PageLimit:   2,
 		}).
 		Return(rows, nil)
 
@@ -110,7 +110,7 @@ func TestListChannels_IATAFilter(t *testing.T) {
 			ChannelHash: nil,
 			Iatas:       []string{"YOW", "YYZ"},
 			CursorTs:    pgtype.Timestamptz{},
-			PageLimit:   11,
+			PageLimit:   10,
 		}).
 		Return([]sqlc.Channel{}, nil)
 
@@ -222,7 +222,7 @@ func TestListChannelMessages_AllChannels(t *testing.T) {
 			Column2: []string{"YVR"},
 			Column3: "",
 			Column4: int64(0),
-			Limit:   3,
+			Limit:   2,
 		}).
 		Return([]sqlc.ListAllChannelMessagesRow{
 			{
@@ -238,15 +238,6 @@ func TestListChannelMessages_AllChannels(t *testing.T) {
 				ID:               2,
 				PacketHashHex:    "cafebabe",
 				ChannelHash:      []byte{0xcd},
-				SenderName:       &senderName,
-				Content:          &content,
-				SentAt:           sentAt,
-				ObservationCount: 1,
-			},
-			{
-				ID:               3,
-				PacketHashHex:    "deadcafe",
-				ChannelHash:      []byte{0xef},
 				SenderName:       &senderName,
 				Content:          &content,
 				SentAt:           sentAt,
@@ -286,7 +277,7 @@ func TestListChannelMessages_ByChannelID(t *testing.T) {
 			Column3:   []string{"YVR"},
 			Column4:   "",
 			Column5:   int64(0),
-			Limit:     3,
+			Limit:     2,
 		}).
 		Return([]sqlc.ListChannelMessagesRow{
 			{

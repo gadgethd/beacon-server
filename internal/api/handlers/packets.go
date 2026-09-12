@@ -45,8 +45,8 @@ func PacketsRouter(reader api.Reader) http.Handler {
 //	@Param		since			query		int		false	"Filter by first_heard_at >= since (epoch ms)"
 //	@Param		until			query		int		false	"Filter by first_heard_at <= until (epoch ms)"
 //	@Param		cursor			query		int		false	"epoch ms of last item for pagination; last_heard_at, or site-local heard_at when iatas is set"
-//	@Param		limit			query		int		false	"Max results (default 50)"
-//	@Success	200				{object}	object
+//	@Param		limit			query		int		false	"Max results (default 20, max 100)"
+//	@Success	200				{object}	api.Page[api.PublicPacketSummary]
 //	@Failure	400				{object}	handlers.APIError
 //	@Failure	500				{object}	handlers.APIError
 //	@Router		/packets [get]
@@ -93,14 +93,10 @@ func listPackets(reader api.Reader) http.HandlerFunc {
 			}
 			cursor = c
 		}
-		var limit int32 = 50
-		if p := r.URL.Query().Get("limit"); p != "" {
-			l, err := strconv.ParseInt(p, 10, 32)
-			if err != nil {
-				respondError(w, http.StatusBadRequest, "limit must be an integer")
-				return
-			}
-			limit = int32(l)
+		limit, err := parseLimit(r)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, err.Error())
+			return
 		}
 		iatas := parseIATAs(r)
 		if regionIDStr := r.URL.Query().Get("regionId"); regionIDStr != "" || r.URL.Query().Get("region") != "" {
@@ -117,7 +113,7 @@ func listPackets(reader api.Reader) http.HandlerFunc {
 			respondError(w, http.StatusInternalServerError, "internal server error")
 			return
 		}
-		respond(w, http.StatusOK, packets)
+		respond(w, http.StatusOK, api.ToPublicPacketPage(packets))
 	}
 }
 
@@ -134,8 +130,8 @@ func listPackets(reader api.Reader) http.HandlerFunc {
 //	@Param		region				query		string	false	"Filter by region slug"
 //	@Param		regionId			query		int		false	"Filter by region ID"
 //	@Param		scope				query		string	false	"Filter by transport scope name"
-//	@Param		limit				query		int		false	"Max results (default 100)"
-//	@Success	200					{object}	[]api.PacketSummary
+//	@Param		limit				query		int		false	"Max results (default 20, max 100)"
+//	@Success	200					{object}	[]api.PublicPacketSummary
 //	@Failure	400					{object}	handlers.APIError
 //	@Failure	500					{object}	handlers.APIError
 //	@Router		/packets/backfill [get]
@@ -151,14 +147,10 @@ func listPacketsBackfill(reader api.Reader) http.HandlerFunc {
 			respondError(w, http.StatusBadRequest, "afterObservationId must be an integer")
 			return
 		}
-		var limit int32 = 100
-		if limitParam := r.URL.Query().Get("limit"); limitParam != "" {
-			l, err := strconv.ParseInt(limitParam, 10, 32)
-			if err != nil {
-				respondError(w, http.StatusBadRequest, "limit must be an integer")
-				return
-			}
-			limit = int32(l)
+		limit, err := parseLimit(r)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, err.Error())
+			return
 		}
 		var payloadType int16 = -1
 		if v := r.URL.Query().Get("payloadType"); v != "" {
@@ -191,7 +183,7 @@ func listPacketsBackfill(reader api.Reader) http.HandlerFunc {
 			respondError(w, http.StatusInternalServerError, "internal server error")
 			return
 		}
-		respond(w, http.StatusOK, packets)
+		respond(w, http.StatusOK, api.ToPublicPacketSummaries(packets))
 	}
 }
 
@@ -201,7 +193,7 @@ func listPacketsBackfill(reader api.Reader) http.HandlerFunc {
 //	@Tags		Packets
 //	@Produce	json
 //	@Param		packetHash	path		string	true	"Packet hash (hex)"
-//	@Success	200			{object}	api.Packet
+//	@Success	200			{object}	api.PublicPacket
 //	@Failure	400			{object}	handlers.APIError
 //	@Failure	404			{object}	handlers.APIError
 //	@Failure	500			{object}	handlers.APIError
@@ -219,6 +211,6 @@ func getPacket(reader api.Reader) http.HandlerFunc {
 			respondError(w, http.StatusNotFound, "packet not found")
 			return
 		}
-		respond(w, http.StatusOK, packet)
+		respond(w, http.StatusOK, api.ToPublicPacket(packet))
 	}
 }

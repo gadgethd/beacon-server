@@ -5,6 +5,7 @@ package hub
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -197,6 +198,28 @@ func TestHub_RemoveScope_StopsDelivery(t *testing.T) {
 		t.Error("expected no event after scope removed")
 	case <-time.After(50 * time.Millisecond):
 		// expected
+	}
+}
+
+func TestHub_AddScope_EnforcesPerClientBound(t *testing.T) {
+	h := runHub(t)
+	c := h.NewClient()
+	for i := 0; i < MaxSubscriptionsPerClient; i++ {
+		if !h.AddScope(c, fmt.Sprintf("sub-%d", i), Scope{}) {
+			t.Fatalf("subscription %d was rejected before the limit", i)
+		}
+	}
+	if h.AddScope(c, "one-too-many", Scope{}) {
+		t.Fatalf("subscription %d should have been rejected", MaxSubscriptionsPerClient+1)
+	}
+	if got := len(c.subscriptions); got != MaxSubscriptionsPerClient {
+		t.Fatalf("stored subscriptions = %d, want %d", got, MaxSubscriptionsPerClient)
+	}
+	if !h.RemoveScope(c, "sub-0") {
+		t.Fatal("existing subscription was not removed")
+	}
+	if !h.AddScope(c, "replacement", Scope{}) {
+		t.Fatal("subscription should be accepted after removal")
 	}
 }
 

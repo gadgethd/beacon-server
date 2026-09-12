@@ -213,7 +213,7 @@ func (s *stubDB) UpsertNode(_ context.Context, _ UpsertNodeParams, _ RadioSettin
 	s.upsertNodeCalls++
 	return uuid.Nil, nil
 }
-func (s *stubDB) ClearNodeLocation(_ context.Context, _ uuid.UUID) error { return nil }
+func (s *stubDB) ClearNodeLocation(_ context.Context, _ uuid.UUID) error        { return nil }
 func (s *stubDB) UpsertNodeIATA(_ context.Context, _ uuid.UUID, _ string) error { return nil }
 func (s *stubDB) UpsertNodeShortID(_ context.Context, _ uuid.UUID, _ string, _ []byte) error {
 	return nil
@@ -314,6 +314,69 @@ func (s *stubScopes) Entries() []scopestore.Entry { return nil }
 type stubKeys struct{}
 
 func (s *stubKeys) GetKey(_ []byte) []keystore.Entry { return nil }
+
+func TestBuildObserverPubkeySet_Empty(t *testing.T) {
+	if set := BuildObserverPubkeySet(nil); set != nil {
+		t.Error("expected nil set for empty allowlist")
+	}
+	if set := BuildObserverPubkeySet([]string{"", "   "}); set != nil {
+		t.Error("expected nil set for blank-only allowlist")
+	}
+}
+
+func TestBuildObserverPubkeySet_Normalizes(t *testing.T) {
+	set := BuildObserverPubkeySet([]string{" 1155abbf9b01168031bd70a1e7691aa345747604a5f2197182d03782cd34771a "})
+	if len(set) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(set))
+	}
+	if _, ok := set["1155ABBF9B01168031BD70A1E7691AA345747604A5F2197182D03782CD34771A"]; !ok {
+		t.Error("expected upper-cased, trimmed key in set")
+	}
+}
+
+func TestPassesIngestFilter_NoFilters(t *testing.T) {
+	w, _ := newTestWorker()
+	if !w.passesIngestFilter("YVR", "AABB") {
+		t.Error("expected message to pass with no filters configured")
+	}
+}
+
+func TestPassesIngestFilter_IATADenied(t *testing.T) {
+	w, _ := newTestWorker()
+	w.cfg.AllowedIATAs = map[string]struct{}{"YVR": {}}
+	if w.passesIngestFilter("LHR", "AABB") {
+		t.Error("expected message from disallowed IATA to be rejected")
+	}
+	if !w.passesIngestFilter("YVR", "AABB") {
+		t.Error("expected message from allowed IATA to pass")
+	}
+}
+
+func TestPassesIngestFilter_ObserverDenied(t *testing.T) {
+	w, _ := newTestWorker()
+	w.cfg.AllowedObserverPubkeys = BuildObserverPubkeySet([]string{"aabbccdd"})
+	if w.passesIngestFilter("YVR", "11223344") {
+		t.Error("expected message from disallowed observer to be rejected")
+	}
+	if !w.passesIngestFilter("YVR", "AABBCCDD") {
+		t.Error("expected message from allowed observer to pass")
+	}
+}
+
+func TestPassesIngestFilter_BothFiltersRequireBoth(t *testing.T) {
+	w, _ := newTestWorker()
+	w.cfg.AllowedIATAs = map[string]struct{}{"YVR": {}}
+	w.cfg.AllowedObserverPubkeys = BuildObserverPubkeySet([]string{"AABBCCDD"})
+	if w.passesIngestFilter("YVR", "11223344") {
+		t.Error("expected rejection when observer is not allowed")
+	}
+	if w.passesIngestFilter("LHR", "AABBCCDD") {
+		t.Error("expected rejection when IATA is not allowed")
+	}
+	if !w.passesIngestFilter("YVR", "AABBCCDD") {
+		t.Error("expected message matching both filters to pass")
+	}
+}
 
 func TestRunCapabilityDetection_HashSizeOne_DoesNothing(t *testing.T) {
 	w, db := newTestWorker()

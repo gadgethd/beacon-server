@@ -66,7 +66,7 @@ func TestListPackets_Pagination(t *testing.T) {
 	mock := mockdb.NewMockQuerier(ctrl)
 
 	heardAt := pgtype.Timestamptz{Time: time.UnixMilli(1700000000000), Valid: true}
-	rows := make([]sqlc.ListPacketsRow, 3)
+	rows := make([]sqlc.ListPacketsRow, 2)
 	for i := range rows {
 		rows[i] = sqlc.ListPacketsRow{
 			PacketHash:   []byte{0xde, 0xad},
@@ -451,7 +451,7 @@ func TestListNodeObservations_Pagination(t *testing.T) {
 	nodeID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
 	heardAt := pgtype.Timestamptz{Time: time.UnixMilli(1700000000000), Valid: true}
 
-	rows := make([]sqlc.ListNodeObservationsRow, 3)
+	rows := make([]sqlc.ListNodeObservationsRow, 2)
 	for i := range rows {
 		rows[i] = sqlc.ListNodeObservationsRow{
 			ID:      int64(i + 1),
@@ -486,29 +486,24 @@ func TestListPackets_IATAFilterRoutesToObservationIndex(t *testing.T) {
 	siteHeard := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
 	globalHeard := time.Date(2026, 7, 2, 8, 0, 0, 0, time.UTC)
 
-	// limit=1 with 2 rows returned exercises the +1 trick and the trim.
+	// A full page conservatively signals that another page may exist.
 	mock.EXPECT().
 		ListPacketsByIATAs(gomock.Any(), gomock.Any()).
 		DoAndReturn(func(_ context.Context, p sqlc.ListPacketsByIATAsParams) ([]sqlc.ListPacketsByIATAsRow, error) {
 			if len(p.Iatas) != 1 || p.Iatas[0] != "ALF" {
 				t.Errorf("iatas param = %v, want [ALF]", p.Iatas)
 			}
-			if p.PageLimit != 2 { // limit+1
-				t.Errorf("page limit = %d, want 2", p.PageLimit)
+			if p.PageLimit != 1 {
+				t.Errorf("page limit = %d, want 1", p.PageLimit)
 			}
-			if p.ScanDepth != 16 { // (limit+1)*8
-				t.Errorf("scan depth = %d, want 16", p.ScanDepth)
+			if p.ScanDepth != 8 {
+				t.Errorf("scan depth = %d, want 8", p.ScanDepth)
 			}
 			return []sqlc.ListPacketsByIATAsRow{
 				{
 					PacketHash:  []byte{0x01},
 					LastHeardAt: pgtype.Timestamptz{Time: globalHeard, Valid: true},
 					SiteHeardAt: pgtype.Timestamptz{Time: siteHeard, Valid: true},
-				},
-				{
-					PacketHash:  []byte{0x02},
-					LastHeardAt: pgtype.Timestamptz{Time: globalHeard, Valid: true},
-					SiteHeardAt: pgtype.Timestamptz{Time: siteHeard.Add(-time.Hour), Valid: true},
 				},
 			}, nil
 		})

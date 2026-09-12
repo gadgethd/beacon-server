@@ -85,6 +85,10 @@ func buildLatestObserverPath(pathLengthByte, hashSize, hopCount *int16, pathByte
 }
 
 func (s *Store) ListPackets(ctx context.Context, payloadTypes, routeTypes []int16, iatas []string, scopes []string, since, until time.Time, cursor int64, limit int32) (api.Page[api.PacketSummary], error) {
+	limit = clampQueryLimit(limit)
+	ctx, cancel := withStatementTimeout(ctx)
+	defer cancel()
+
 	if len(iatas) > 0 {
 		return s.listPacketsByIATAs(ctx, payloadTypes, routeTypes, iatas, scopes, since, until, cursor, limit)
 	}
@@ -106,16 +110,13 @@ func (s *Store) ListPackets(ctx context.Context, payloadTypes, routeTypes []int1
 		Column3: sinceTS,
 		Column4: untilTS,
 		Column5: cursorTS,
-		Limit:   limit + 1,
+		Limit:   limit,
 		Column7: scopes,
 	})
 	if err != nil {
 		return api.Page[api.PacketSummary]{}, err
 	}
-	hasMore := len(rows) > int(limit)
-	if hasMore {
-		rows = rows[:limit]
-	}
+	hasMore := len(rows) == int(limit)
 	items := make([]api.PacketSummary, 0, len(rows))
 	for _, v := range rows {
 		item := api.PacketSummary{
@@ -171,22 +172,19 @@ func (s *Store) listPacketsByIATAs(ctx context.Context, payloadTypes, routeTypes
 	// to still fill the page after collapsing those duplicates.
 	rows, err := s.q.ListPacketsByIATAs(ctx, sqlc.ListPacketsByIATAsParams{
 		Iatas:        iatas,
-		ScanDepth:    (limit + 1) * 8,
+		ScanDepth:    limit * 8,
 		CursorTs:     cursorTS,
 		PayloadTypes: payloadTypes,
 		RouteTypes:   routeTypes,
 		SinceTs:      sinceTS,
 		UntilTs:      untilTS,
 		ScopeNames:   scopes,
-		PageLimit:    limit + 1,
+		PageLimit:    limit,
 	})
 	if err != nil {
 		return api.Page[api.PacketSummary]{}, err
 	}
-	hasMore := len(rows) > int(limit)
-	if hasMore {
-		rows = rows[:limit]
-	}
+	hasMore := len(rows) == int(limit)
 	items := make([]api.PacketSummary, 0, len(rows))
 	for _, v := range rows {
 		item := api.PacketSummary{
@@ -226,6 +224,10 @@ func (s *Store) listPacketsByIATAs(ctx context.Context, payloadTypes, routeTypes
 }
 
 func (s *Store) ListPacketsAfterID(ctx context.Context, afterObservationID int64, payloadType, routeType int16, iatas []string, scope string, limit int32) ([]api.PacketSummary, error) {
+	limit = clampQueryLimit(limit)
+	ctx, cancel := withStatementTimeout(ctx)
+	defer cancel()
+
 	rows, err := s.q.ListPacketsAfterID(ctx, sqlc.ListPacketsAfterIDParams{
 		ID:      afterObservationID,
 		Column2: payloadType,
@@ -555,18 +557,19 @@ func (s *Store) InsertObservation(ctx context.Context, o ingest.InsertObservatio
 }
 
 func (s *Store) ListNodeObservations(ctx context.Context, nodeID uuid.UUID, cursor int64, limit int32) (api.Page[api.PacketObservationSummary], error) {
+	limit = clampQueryLimit(limit)
+	ctx, cancel := withStatementTimeout(ctx)
+	defer cancel()
+
 	rows, err := s.q.ListNodeObservations(ctx, sqlc.ListNodeObservationsParams{
 		ID:      nodeID,
 		Column2: cursor,
-		Limit:   limit + 1,
+		Limit:   limit,
 	})
 	if err != nil {
 		return api.Page[api.PacketObservationSummary]{}, err
 	}
-	hasMore := len(rows) > int(limit)
-	if hasMore {
-		rows = rows[:limit]
-	}
+	hasMore := len(rows) == int(limit)
 	items := make([]api.PacketObservationSummary, 0, len(rows))
 	for _, v := range rows {
 		items = append(items, api.PacketObservationSummary{

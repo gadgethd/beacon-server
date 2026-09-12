@@ -71,6 +71,11 @@ type Config struct {
 	// Build this set at startup from IngestFilterConfig using iatadb.
 	AllowedIATAs map[string]struct{}
 
+	// AllowedObserverPubkeys is a pre-computed, upper-cased set of hex observer
+	// public keys derived from the ingest filter config. If non-nil, messages
+	// from observers not in this set are dropped.
+	AllowedObserverPubkeys map[string]struct{}
+
 	// TelemetryResolution controls how frequently telemetry snapshots are stored.
 	// Status messages within the same window are deduplicated via ON CONFLICT.
 	// Defaults to 1 hour if zero.
@@ -233,6 +238,41 @@ func New(cfg Config, db DB, h *hub.Hub, keys ChannelKeyStore, scopes ScopeStore)
 	return &Worker{cfg: cfg, db: db, hub: h, keys: keys, scopes: scopes}
 }
 
+// BuildObserverPubkeySet normalizes an allowlist of hex observer public keys
+// into an upper-cased set. Returns nil when the list is empty (filter disabled).
+func BuildObserverPubkeySet(pubkeys []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(pubkeys))
+	for _, pk := range pubkeys {
+		pk = strings.ToUpper(strings.TrimSpace(pk))
+		if pk != "" {
+			set[pk] = struct{}{}
+		}
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	return set
+}
+
+// passesIngestFilter reports whether a message from the given IATA and observer
+// pubkey is permitted by the configured ingest allowlists. A nil set disables
+// that filter. Rejections are logged with the reason.
+func (w *Worker) passesIngestFilter(iata, pubkeyHex string) bool {
+	if w.cfg.AllowedIATAs != nil {
+		if _, ok := w.cfg.AllowedIATAs[iata]; !ok {
+			log.Printf("ingest[%s]: dropped message from %s (not in allowed IATAs)", w.cfg.BrokerName, iata)
+			return false
+		}
+	}
+	if w.cfg.AllowedObserverPubkeys != nil {
+		if _, ok := w.cfg.AllowedObserverPubkeys[strings.ToUpper(pubkeyHex)]; !ok {
+			log.Printf("ingest[%s]: dropped message from %s/%s (observer not in allowlist)", w.cfg.BrokerName, iata, pubkeyHex)
+			return false
+		}
+	}
+	return true
+}
+
 // Start connects to the broker and blocks until ctx is cancelled. It
 // reconnects automatically on transient failures using paho's built-in
 // reconnect logic.
@@ -333,14 +373,9 @@ func (w *Worker) handleMessage(msg mqtt.Message) {
 		return
 	}
 
-	// Drop packets from IATAs outside the configured geographic filter.
-	if w.cfg.AllowedIATAs != nil {
-		if _, ok := w.cfg.AllowedIATAs[iata]; !ok {
-			log.Printf("ingest[%s]: dropped packet from %s (not in allowed IATAs)", w.cfg.BrokerName, iata)
-			return
-		}
+	if !w.passesIngestFilter(iata, pubkeyHex) {
+		return
 	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 

@@ -45,8 +45,8 @@ func ObserversRouter(reader api.Reader) http.Handler {
 //	@Param		name	query		string	false	"Partial case-insensitive display name match"
 //	@Param		scope	query		string	false	"Filter by transport scope name e.g. %23bc (URL-encoded #bc)"
 //	@Param		cursor	query		int		false	"last_seen epoch ms of last item for pagination"
-//	@Param		limit	query		int		false	"Max results (default 50)"
-//	@Success	200		{object}	api.Page[api.ObserverSummary]
+//	@Param		limit	query		int		false	"Max results (default 20, max 100)"
+//	@Success	200		{object}	api.Page[api.PublicObserverSummary]
 //	@Failure	400		{object}	handlers.APIError
 //	@Failure	500		{object}	handlers.APIError
 //	@Router		/observers [get]
@@ -66,14 +66,10 @@ func listObservers(reader api.Reader) http.HandlerFunc {
 			}
 			cursor = c
 		}
-		var limit int32 = 50
-		if limitParam := r.URL.Query().Get("limit"); limitParam != "" {
-			l, err := strconv.ParseInt(limitParam, 10, 32)
-			if err != nil {
-				respondError(w, http.StatusBadRequest, "limit must be an integer")
-				return
-			}
-			limit = int32(l)
+		limit, err := parseLimit(r)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, err.Error())
+			return
 		}
 		iatas := parseIATAs(r)
 		if regionIDStr := r.URL.Query().Get("regionId"); regionIDStr != "" || r.URL.Query().Get("region") != "" {
@@ -89,7 +85,7 @@ func listObservers(reader api.Reader) http.HandlerFunc {
 			respondError(w, http.StatusInternalServerError, "failed to get list of observers")
 			return
 		}
-		respond(w, http.StatusOK, observers)
+		respond(w, http.StatusOK, api.ToPublicObserverPage(observers))
 	}
 }
 
@@ -99,7 +95,7 @@ func listObservers(reader api.Reader) http.HandlerFunc {
 //	@Tags		Observers
 //	@Produce	json
 //	@Param		observerId	path		string	true	"Observer UUID"
-//	@Success	200			{object}	api.Observer
+//	@Success	200			{object}	api.PublicObserver
 //	@Failure	400			{object}	handlers.APIError
 //	@Failure	404			{object}	handlers.APIError
 //	@Router		/observers/{observerId} [get]
@@ -116,7 +112,7 @@ func getObserver(reader api.Reader) http.HandlerFunc {
 			respondError(w, http.StatusNotFound, "observer not found")
 			return
 		}
-		respond(w, http.StatusOK, obs)
+		respond(w, http.StatusOK, api.ToPublicObserver(obs))
 	}
 }
 
@@ -127,8 +123,8 @@ func getObserver(reader api.Reader) http.HandlerFunc {
 //	@Produce	json
 //	@Param		observerId	path		string	true	"Observer UUID"
 //	@Param		cursor		query		int		false	"Observation ID of last item for pagination"
-//	@Param		limit		query		int		false	"Max results (default 50)"
-//	@Success	200			{object}	api.Page[api.AdvertObservation]
+//	@Param		limit		query		int		false	"Max results (default 20, max 100)"
+//	@Success	200			{object}	api.Page[api.PublicAdvertObservation]
 //	@Failure	400			{object}	handlers.APIError
 //	@Failure	500			{object}	handlers.APIError
 //	@Router		/observers/{observerId}/adverts [get]
@@ -148,21 +144,17 @@ func listObserverAdverts(reader api.Reader) http.HandlerFunc {
 			}
 			cursor = c
 		}
-		var limit int32 = 50
-		if limitParam := r.URL.Query().Get("limit"); limitParam != "" {
-			l, err := strconv.ParseInt(limitParam, 10, 32)
-			if err != nil {
-				respondError(w, http.StatusBadRequest, "limit must be an integer")
-				return
-			}
-			limit = int32(l)
+		limit, err := parseLimit(r)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, err.Error())
+			return
 		}
 		adverts, err := reader.ListObserverAdverts(r.Context(), observerID, cursor, limit)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "internal server error")
 			return
 		}
-		respond(w, http.StatusOK, adverts)
+		respond(w, http.StatusOK, api.ToPublicAdvertObservationPage(adverts))
 	}
 }
 

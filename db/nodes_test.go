@@ -183,7 +183,7 @@ func TestListNodes_Pagination(t *testing.T) {
 	nodeID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
 	lastSeen := pgtype.Timestamptz{Time: time.UnixMilli(1700000000000), Valid: true}
 
-	rows := make([]sqlc.ListNodesRow, 3)
+	rows := make([]sqlc.ListNodesRow, 2)
 	for i := range rows {
 		rows[i] = sqlc.ListNodesRow{
 			ID:        nodeID,
@@ -645,7 +645,7 @@ func TestListNodes_IncludeNeighbors_PassesFlagAndMapsIDs(t *testing.T) {
 		ListNodes(gomock.Any(), gomock.Eq(sqlc.ListNodesParams{
 			Column1: int16(0), Column2: nil, Column3: "any", Column4: "any",
 			Column5: nil, Column6: "", Column7: pgtype.Timestamptz{},
-			Limit: 11, Column9: "", Column10: true,
+			Limit: 10, Column9: "", Column10: true,
 		})).
 		Return([]sqlc.ListNodesRow{
 			{
@@ -675,7 +675,7 @@ func TestListNodes_ExcludeNeighbors_LeavesIDsNil(t *testing.T) {
 		ListNodes(gomock.Any(), gomock.Eq(sqlc.ListNodesParams{
 			Column1: int16(0), Column2: nil, Column3: "any", Column4: "any",
 			Column5: nil, Column6: "", Column7: pgtype.Timestamptz{},
-			Limit: 11, Column9: "", Column10: false,
+			Limit: 10, Column9: "", Column10: false,
 		})).
 		Return([]sqlc.ListNodesRow{
 			{ID: nodeID, PublicKey: []byte{0x01}, NeighborIds: nil},

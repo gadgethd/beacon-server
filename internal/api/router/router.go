@@ -41,7 +41,7 @@ import (
 //
 // The private group is stubbed and ready for the auth middleware drop-in
 // described in Future Features → Admin authentication.
-func New(h *hub.Hub, reader api.Reader, workers []*ingest.Worker, maxConnsPerIP int, corsCfg config.CORSConfig) http.Handler {
+func New(h *hub.Hub, reader api.Reader, workers []*ingest.Worker, wsCfg config.ResolvedWebSocketConfig, corsCfg config.CORSConfig) http.Handler {
 	r := chi.NewRouter()
 
 	// ── CORS ─────────────────────────────────────────────────────────────────
@@ -71,7 +71,6 @@ func New(h *hub.Hub, reader api.Reader, workers []*ingest.Worker, maxConnsPerIP 
 
 	// ── Global middleware ────────────────────────────────────────────────────
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.CleanPath)
@@ -87,7 +86,14 @@ func New(h *hub.Hub, reader api.Reader, workers []*ingest.Worker, maxConnsPerIP 
 	))
 
 	// ── WebSocket ────────────────────────────────────────────────────────────
-	r.Get("/ws", ws.Handler(h, reader, maxConnsPerIP))
+	wsHandler := ws.NewHandler(h, reader, ws.Options{
+		MaxConnections:      wsCfg.MaxConnections,
+		MaxConnectionsPerIP: wsCfg.MaxConnectionsPerIP,
+		HandshakesPerMinute: wsCfg.HandshakesPerMinute,
+		TrustedProxyCIDRs:   wsCfg.TrustedProxyCIDRs,
+	})
+	r.Get("/ws", wsHandler.ServeHTTP)
+	r.Get("/metrics", wsHandler.ServeMetrics)
 
 	// ── Public REST API (v1) ─────────────────────────────────────────────────
 	r.Route("/api/v1", func(r chi.Router) {

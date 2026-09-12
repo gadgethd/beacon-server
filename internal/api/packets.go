@@ -12,7 +12,8 @@ import (
 	"github.com/meshcore-go/meshcore-go"
 )
 
-// PacketLatestObserver is the most recent observer summary rolled into a packet list item.
+// PacketLatestObserver is the internal most recent observer summary rolled into
+// a packet list item. Use ToPublicPacketLatestObserver at the public boundary.
 type PacketLatestObserver struct {
 	ID          uuid.UUID `json:"id"`
 	DisplayName *string   `json:"displayName,omitempty"`
@@ -31,7 +32,7 @@ type PacketLatestObserver struct {
 	ResolvedDestination *ResolvedHop      `json:"resolvedDestination,omitempty"`
 }
 
-// PacketSummary is the minimal packet representation used in list responses.
+// PacketSummary is the internal packet read model used in list responses.
 // Includes the latest observation rolled in for display purposes.
 type PacketSummary struct {
 	PacketHash       string                `json:"packetHash"` // hex-encoded
@@ -134,7 +135,9 @@ type PacketTransportCodes struct {
 	SubRegionCode int32 `json:"subRegionCode"`
 }
 
-// Packet is the full packet representation including all observations and resolved paths.
+// Packet is the internal full packet read model. It contains raw and parsed
+// payloads plus detailed observations; use ToPublicPacket before serializing it
+// in a public response.
 type Packet struct {
 	PacketHash       string                    `json:"packetHash"`
 	Header           PacketHeader              `json:"header"`
@@ -151,6 +154,222 @@ type Packet struct {
 	ObservationCount int32                     `json:"observationCount"`
 	ResolvedRoute    []ResolvedHop             `json:"resolvedRoute,omitempty"` // trace packets only: resolved intended route
 	Observations     []PacketObservationDetail `json:"observations"`
+}
+
+// PublicPacketLatestObserver is the allowlisted latest-observer representation
+// used in public packet list responses.
+type PublicPacketLatestObserver struct {
+	ID                  uuid.UUID         `json:"id"`
+	DisplayName         *string           `json:"displayName,omitempty"`
+	IATA                string            `json:"iata"`
+	PathLength          *PacketPathLength `json:"pathLength,omitempty"`
+	PathBytes           *string           `json:"pathBytes,omitempty"`
+	ResolvedPath        []ResolvedHop     `json:"resolvedPath,omitempty"`
+	ResolvedSource      *ResolvedHop      `json:"resolvedSource,omitempty"`
+	ResolvedDestination *ResolvedHop      `json:"resolvedDestination,omitempty"`
+}
+
+// PublicPacketSummary is the allowlisted packet representation returned by
+// public list and reconnect-backfill endpoints.
+type PublicPacketSummary struct {
+	PacketHash       string                      `json:"packetHash"`
+	PayloadType      int16                       `json:"payloadType"`
+	PayloadTypeName  string                      `json:"payloadTypeName"`
+	RouteType        int16                       `json:"routeType"`
+	RouteTypeName    string                      `json:"routeTypeName"`
+	Scope            *string                     `json:"scope,omitempty"`
+	FirstHeardAt     int64                       `json:"firstHeardAt"`
+	LastHeardAt      int64                       `json:"lastHeardAt"`
+	ObservationCount int32                       `json:"observationCount"`
+	LatestObserver   *PublicPacketLatestObserver `json:"latestObserver,omitempty"`
+	Summary          *string                     `json:"summary,omitempty"`
+}
+
+// PublicPacketObservationSummary is the allowlisted lightweight observation
+// representation used by public node/observer list endpoints.
+type PublicPacketObservationSummary struct {
+	ID              int64    `json:"id"`
+	PacketHash      string   `json:"packetHash"`
+	PayloadType     int16    `json:"payloadType"`
+	PayloadTypeName string   `json:"payloadTypeName"`
+	IATA            string   `json:"iata"`
+	HeardAt         int64    `json:"heardAt"`
+	RSSI            *int16   `json:"rssi,omitempty"`
+	SNR             *float32 `json:"snr,omitempty"`
+	HopCount        *int16   `json:"hopCount,omitempty"`
+}
+
+// PublicAdvertObservation is the allowlisted advert observation representation
+// used by the observer adverts endpoint.
+type PublicAdvertObservation struct {
+	PublicPacketObservationSummary
+	NodeName      *string `json:"nodeName,omitempty"`
+	NodePublicKey *string `json:"nodePublicKey,omitempty"`
+}
+
+// PublicPacket is the allowlisted packet detail response. ParsedPayload,
+// RawPayload, and Observations are intentionally absent: they can contain raw
+// packet data, decrypted content, and high-volume internal observation detail.
+type PublicPacket struct {
+	PacketHash       string                `json:"packetHash"`
+	Header           PacketHeader          `json:"header"`
+	TransportCodes   *PacketTransportCodes `json:"transportCodes,omitempty"`
+	OriginPubkey     *string               `json:"originPubkey,omitempty"`
+	Decrypted        bool                  `json:"decrypted"`
+	ChannelHash      *string               `json:"channelHash,omitempty"`
+	Scope            *string               `json:"scope,omitempty"`
+	FirstHeardAt     int64                 `json:"firstHeardAt"`
+	LastHeardAt      int64                 `json:"lastHeardAt"`
+	FirstToLastMs    int64                 `json:"firstToLastMs"`
+	ObservationCount int32                 `json:"observationCount"`
+	ResolvedRoute    []ResolvedHop         `json:"resolvedRoute,omitempty"`
+}
+
+// ToPublicPacketLatestObserver maps an internal latest-observer record to its
+// public DTO.
+func ToPublicPacketLatestObserver(observer *PacketLatestObserver) *PublicPacketLatestObserver {
+	if observer == nil {
+		return nil
+	}
+	public := &PublicPacketLatestObserver{
+		ID:                  observer.ID,
+		DisplayName:         observer.DisplayName,
+		IATA:                observer.IATA,
+		PathLength:          observer.PathLength,
+		PathBytes:           observer.PathBytes,
+		ResolvedSource:      observer.ResolvedSource,
+		ResolvedDestination: observer.ResolvedDestination,
+	}
+	if observer.ResolvedPath != nil {
+		public.ResolvedPath = append([]ResolvedHop(nil), observer.ResolvedPath...)
+	}
+	return public
+}
+
+// ToPublicPacketSummary maps an internal packet summary to its public DTO.
+func ToPublicPacketSummary(packet PacketSummary) PublicPacketSummary {
+	return PublicPacketSummary{
+		PacketHash:       packet.PacketHash,
+		PayloadType:      packet.PayloadType,
+		PayloadTypeName:  packet.PayloadTypeName,
+		RouteType:        packet.RouteType,
+		RouteTypeName:    packet.RouteTypeName,
+		Scope:            packet.Scope,
+		FirstHeardAt:     packet.FirstHeardAt,
+		LastHeardAt:      packet.LastHeardAt,
+		ObservationCount: packet.ObservationCount,
+		LatestObserver:   ToPublicPacketLatestObserver(packet.LatestObserver),
+		Summary:          packet.Summary,
+	}
+}
+
+// ToPublicPacketPage maps a packet list page to an allowlisted public page.
+func ToPublicPacketPage(page Page[PacketSummary]) Page[PublicPacketSummary] {
+	public := Page[PublicPacketSummary]{
+		NextCursor: page.NextCursor,
+		HasMore:    page.HasMore,
+	}
+	if page.Items != nil {
+		public.Items = make([]PublicPacketSummary, len(page.Items))
+		for i, packet := range page.Items {
+			public.Items[i] = ToPublicPacketSummary(packet)
+		}
+	}
+	return public
+}
+
+// ToPublicPacketSummaries maps packet summaries to public DTOs.
+func ToPublicPacketSummaries(packets []PacketSummary) []PublicPacketSummary {
+	if packets == nil {
+		return nil
+	}
+	public := make([]PublicPacketSummary, len(packets))
+	for i, packet := range packets {
+		public[i] = ToPublicPacketSummary(packet)
+	}
+	return public
+}
+
+// ToPublicPacketObservationSummary maps an internal observation summary to its
+// public DTO.
+func ToPublicPacketObservationSummary(observation PacketObservationSummary) PublicPacketObservationSummary {
+	return PublicPacketObservationSummary{
+		ID:              observation.ID,
+		PacketHash:      observation.PacketHash,
+		PayloadType:     observation.PayloadType,
+		PayloadTypeName: observation.PayloadTypeName,
+		IATA:            observation.IATA,
+		HeardAt:         observation.HeardAt,
+		RSSI:            observation.RSSI,
+		SNR:             observation.SNR,
+		HopCount:        observation.HopCount,
+	}
+}
+
+// ToPublicPacketObservationPage maps an observation list page to an
+// allowlisted public page.
+func ToPublicPacketObservationPage(page Page[PacketObservationSummary]) Page[PublicPacketObservationSummary] {
+	public := Page[PublicPacketObservationSummary]{
+		NextCursor: page.NextCursor,
+		HasMore:    page.HasMore,
+	}
+	if page.Items != nil {
+		public.Items = make([]PublicPacketObservationSummary, len(page.Items))
+		for i, observation := range page.Items {
+			public.Items[i] = ToPublicPacketObservationSummary(observation)
+		}
+	}
+	return public
+}
+
+// ToPublicAdvertObservation maps an internal advert observation to its public
+// DTO.
+func ToPublicAdvertObservation(observation AdvertObservation) PublicAdvertObservation {
+	return PublicAdvertObservation{
+		PublicPacketObservationSummary: ToPublicPacketObservationSummary(observation.PacketObservationSummary),
+		NodeName:                       observation.NodeName,
+		NodePublicKey:                  observation.NodePublicKey,
+	}
+}
+
+// ToPublicAdvertObservationPage maps an advert list page to an allowlisted
+// public page.
+func ToPublicAdvertObservationPage(page Page[AdvertObservation]) Page[PublicAdvertObservation] {
+	public := Page[PublicAdvertObservation]{
+		NextCursor: page.NextCursor,
+		HasMore:    page.HasMore,
+	}
+	if page.Items != nil {
+		public.Items = make([]PublicAdvertObservation, len(page.Items))
+		for i, observation := range page.Items {
+			public.Items[i] = ToPublicAdvertObservation(observation)
+		}
+	}
+	return public
+}
+
+// ToPublicPacket maps an internal full packet read model to its public DTO.
+func ToPublicPacket(packet *Packet) *PublicPacket {
+	if packet == nil {
+		return nil
+	}
+	public := &PublicPacket{
+		PacketHash:       packet.PacketHash,
+		Header:           packet.Header,
+		TransportCodes:   packet.TransportCodes,
+		OriginPubkey:     packet.OriginPubkey,
+		Decrypted:        packet.Decrypted,
+		ChannelHash:      packet.ChannelHash,
+		Scope:            packet.Scope,
+		FirstHeardAt:     packet.FirstHeardAt,
+		LastHeardAt:      packet.LastHeardAt,
+		FirstToLastMs:    packet.FirstToLastMs,
+		ObservationCount: packet.ObservationCount,
+	}
+	if packet.ResolvedRoute != nil {
+		public.ResolvedRoute = append([]ResolvedHop(nil), packet.ResolvedRoute...)
+	}
+	return public
 }
 
 // AdvertObservation extends PacketObservationSummary with node identity fields

@@ -33,6 +33,10 @@ func (s *Store) DeleteOldTraceIATAs(ctx context.Context, cutoff time.Time) error
 }
 
 func (s *Store) ListTraceTags(ctx context.Context, iatas []string, scope, traceType string, since, until time.Time, cursor time.Time, limit int32) ([]api.TraceTagSummary, error) {
+	limit = clampQueryLimit(limit)
+	ctx, cancel := withStatementTimeout(ctx)
+	defer cancel()
+
 	var sinceTS, untilTS, cursorTS pgtype.Timestamptz
 	if !since.IsZero() {
 		sinceTS = pgtype.Timestamptz{Time: since, Valid: true}

@@ -64,14 +64,14 @@ func TestContinentFor_Unknown(t *testing.T) {
 }
 
 func TestBuildAllowedSet_Empty(t *testing.T) {
-	result := iatadb.BuildAllowedSet(nil, nil)
+	result := iatadb.BuildAllowedSet(nil, nil, nil)
 	if result != nil {
 		t.Error("expected nil for empty filter")
 	}
 }
 
 func TestBuildAllowedSet_ByCountry(t *testing.T) {
-	allowed := iatadb.BuildAllowedSet([]string{"CA"}, nil)
+	allowed := iatadb.BuildAllowedSet([]string{"CA"}, nil, nil)
 	if allowed == nil {
 		t.Fatal("expected non-nil result")
 	}
@@ -84,7 +84,7 @@ func TestBuildAllowedSet_ByCountry(t *testing.T) {
 }
 
 func TestBuildAllowedSet_ByContinent(t *testing.T) {
-	allowed := iatadb.BuildAllowedSet(nil, []string{"NA"})
+	allowed := iatadb.BuildAllowedSet(nil, []string{"NA"}, nil)
 	if allowed == nil {
 		t.Fatal("expected non-nil result")
 	}
@@ -97,7 +97,7 @@ func TestBuildAllowedSet_ByContinent(t *testing.T) {
 }
 
 func TestBuildAllowedSet_ORSemantics(t *testing.T) {
-	allowed := iatadb.BuildAllowedSet([]string{"CA"}, []string{"EU"})
+	allowed := iatadb.BuildAllowedSet([]string{"CA"}, []string{"EU"}, nil)
 	if allowed == nil {
 		t.Fatal("expected non-nil result")
 	}
@@ -109,5 +109,38 @@ func TestBuildAllowedSet_ORSemantics(t *testing.T) {
 	}
 	if _, ok := allowed["GRU"]; ok {
 		t.Error("expected GRU (SA/BR) to be excluded")
+	}
+}
+
+func TestBuildAllowedSet_ByExplicitIATA(t *testing.T) {
+	allowed := iatadb.BuildAllowedSet(nil, nil, []string{"YVR", " bhx "})
+	if allowed == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if _, ok := allowed["YVR"]; !ok {
+		t.Error("expected YVR to be allowed")
+	}
+	if _, ok := allowed["BHX"]; !ok {
+		t.Error("expected BHX to be allowed after normalization")
+	}
+	if _, ok := allowed["LHR"]; ok {
+		t.Error("expected LHR to be excluded")
+	}
+}
+
+func TestBuildAllowedSet_ExplicitIATANotInDB(t *testing.T) {
+	allowed := iatadb.BuildAllowedSet(nil, nil, []string{"ZZZ"})
+	if allowed == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if _, ok := allowed["ZZZ"]; !ok {
+		t.Error("expected explicit IATA to be allowed even when absent from iatadb")
+	}
+}
+
+func TestBuildAllowedSet_EmptyExplicitIATAOnlyBlanks(t *testing.T) {
+	allowed := iatadb.BuildAllowedSet(nil, nil, []string{"", "  "})
+	if allowed != nil {
+		t.Error("expected nil when the only explicit entries normalize to empty")
 	}
 }

@@ -22,6 +22,662 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/admin/accounts": {
+            "get": {
+                "security": [
+                    {
+                        "AdminKey": []
+                    }
+                ],
+                "description": "Includes active and inactive accounts, newest first. These records are not login users.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "List operator accounts",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.AccountList"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "AdminKey": []
+                    }
+                ],
+                "description": "Trims the name; names are case-sensitive and unique among active accounts. No credential or login is created.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Create an operator account",
+                "parameters": [
+                    {
+                        "description": "Account name (1-128 Unicode characters, no control characters); body at most 4 KiB",
+                        "name": "account",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.CreateAccountRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.Account"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    },
+                    "415": {
+                        "description": "Unsupported Media Type",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/accounts/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "AdminKey": []
+                    }
+                ],
+                "description": "Returns active or inactive account records.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Get an operator account",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Account UUID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.Account"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "AdminKey": []
+                    }
+                ],
+                "description": "Soft deactivation preserves the record. Its name may be reused by a new account.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Deactivate an operator account",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Account UUID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "Deactivated"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/backup": {
+            "get": {
+                "security": [
+                    {
+                        "AdminKey": []
+                    }
+                ],
+                "description": "Opt-in operator export. Returns only a completed bundle; one export/transfer at a time. Contains secrets. Login sessions, external deployment files and import are outside this endpoint.",
+                "produces": [
+                    "application/gzip"
+                ],
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Download a private database and saved-config backup",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "file"
+                        },
+                        "headers": {
+                            "Content-Disposition": {
+                                "type": "string",
+                                "description": "attachment; filename=beacon-backup.tar.gz"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    },
+                    "504": {
+                        "description": "Gateway Timeout",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    },
+                    "507": {
+                        "description": "Insufficient Storage",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/config": {
+            "get": {
+                "security": [
+                    {
+                        "AdminKey": []
+                    }
+                ],
+                "description": "Returns current CORS options, auth configuration status, configured broker count and, when database guards are configured, their state. Credential fields and other configuration are excluded. Runtime origin updates are lost on restart. PUT also replaces guards.enforce at runtime; the configuration file is the boot default.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Inspect selected running configuration",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.AdminConfig"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "AdminKey": []
+                    }
+                ],
+                "description": "Replaces cors.allowed_origins, guards.enforce or both immediately; at least one is required. Both are validated before either is applied. An empty guards.enforce list makes every family observe. Updates are serialized; concurrent valid updates are applied one at a time. Already-running requests may finish with the previous policy. Nothing is persisted; restart reloads saved configuration.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Update runtime CORS origins and enforced guard families",
+                "parameters": [
+                    {
+                        "description": "cors.allowed_origins: 1-32 ASCII HTTP(S) origins, at most 512 bytes each; one hostname wildcard is supported, or a sole *. Empty/null lists and unsupported fields are rejected. guards.enforce: guard family names, possibly empty. Body at most 16 KiB.",
+                        "name": "config",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.UpdateAdminConfigRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.UpdateAdminConfigResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    },
+                    "415": {
+                        "description": "Unsupported Media Type",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/db/planguard": {
+            "get": {
+                "security": [
+                    {
+                        "AdminKey": []
+                    }
+                ],
+                "description": "Plans every corpus statement in custom and generic mode against this database, read-only and without executing it (plain EXPLAIN, 5 s per plan, 1 s lock timeout), and checks each plan against the corpus. Off unless planguard.daily_check is set (404 \"planguard daily check is disabled\"); when on, the check runs about an hour after boot and then daily, and until its first run this returns 404. fresh=true runs it now, shared with any run in progress and cancelled at server shutdown; within 5 minutes of the last run's end it starts nothing and returns the last successful report (started_at gives its age), or 500 when no run has succeeded yet. A read-only server cannot enable the check (configuration refuses planguard.daily_check with server.read_only), so there this returns 404 \"planguard daily check is disabled\".",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Last daily plan regression check",
+                "parameters": [
+                    {
+                        "type": "boolean",
+                        "description": "Run the check now instead of returning the last report",
+                        "name": "fresh",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PlanguardReport"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/db/statements": {
+            "get": {
+                "security": [
+                    {
+                        "AdminKey": []
+                    }
+                ],
+                "description": "Sums pg_stat_statements for this database by sqlc statement name, highest total execution time first. Statements without a name are summed as \"(unnamed)\". Times are milliseconds rounded to microseconds; plan_ms stays 0 unless pg_stat_statements.track_planning is on. Counters run from the last pg_stat_statements reset.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Statement statistics by sqlc name",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.DBStatementsResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/internal_api_handlers.APIError"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/brokers": {
             "get": {
                 "produces": [
@@ -62,25 +718,39 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Filter by IATA code",
+                        "description": "Filter by IATA code: channels MeshMapper lists there, config channels scoped to a region containing it, and Beacon-wide config channels",
                         "name": "iata",
                         "in": "query"
                     },
                     {
                         "type": "string",
-                        "description": "Filter by IATA code(s), comma-separated e.g. YOW or YOW,YYZ",
+                        "description": "Filter by IATA code(s), comma-separated e.g. YOW or YOW,YYZ; same membership rule as iata",
                         "name": "iatas",
                         "in": "query"
                     },
                     {
-                        "type": "integer",
-                        "description": "last_seen epoch ms of last item for pagination",
-                        "name": "cursor",
+                        "type": "boolean",
+                        "description": "Only channels Beacon can (true) or cannot (false) decrypt; omit for all",
+                        "name": "keyKnown",
                         "in": "query"
                     },
                     {
                         "type": "integer",
-                        "description": "Max results (default 20, max 100)",
+                        "description": "last_seen epoch ms of last item for pagination; 0 starts from the beginning",
+                        "name": "cursor",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Opaque nextPageCursor from a previous response; preserves timestamp ties and precision. Cannot be combined with a positive cursor; cursor=0 is allowed.",
+                        "name": "pageCursor",
+                        "in": "query"
+                    },
+                    {
+                        "maximum": 200,
+                        "minimum": 1,
+                        "type": "integer",
+                        "description": "Max results (default 50); must be positive, values above 200 are clamped",
                         "name": "limit",
                         "in": "query"
                     }
@@ -89,7 +759,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_ChannelSummary"
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ChannelPage"
                         }
                     },
                     "400": {
@@ -100,6 +770,12 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
@@ -140,6 +816,18 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
@@ -201,8 +889,10 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
+                        "maximum": 200,
+                        "minimum": 1,
                         "type": "integer",
-                        "description": "Max results (default 20, max 100)",
+                        "description": "Max results (default 50); must be positive, values above 200 are clamped",
                         "name": "limit",
                         "in": "query"
                     }
@@ -222,6 +912,12 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "Not available yet, or the server is busy: retry after Retry-After seconds",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
@@ -248,8 +944,14 @@ const docTemplate = `{
                             }
                         }
                     },
-                    "404": {
-                        "description": "Not Found",
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
@@ -284,6 +986,18 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
@@ -323,6 +1037,38 @@ const docTemplate = `{
                         "description": "Not Found",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    }
+                }
+            }
+        },
+        "/info": {
+            "get": {
+                "description": "minAppVersion (BEACON Mobile) and minWebVersion (Beacon Web) are null when the\nserver sets no requirement. Each is the higher of the built-in floor and config.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Info"
+                ],
+                "summary": "Server info and minimum client versions",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.Info"
                         }
                     }
                 }
@@ -387,8 +1133,10 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
+                        "maximum": 200,
+                        "minimum": 1,
                         "type": "integer",
-                        "description": "Max results (default 20, max 100)",
+                        "description": "Max results (default 50); must be positive, values above 200 are clamped",
                         "name": "limit",
                         "in": "query"
                     }
@@ -408,6 +1156,12 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "Not available yet, or the server is busy: retry after Retry-After seconds",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
@@ -457,8 +1211,10 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
+                        "maximum": 200,
+                        "minimum": 1,
                         "type": "integer",
-                        "description": "Max results (default 20, max 100)",
+                        "description": "Max results (default 100); must be positive, values above 200 are clamped",
                         "name": "limit",
                         "in": "query"
                     }
@@ -481,6 +1237,12 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
@@ -583,8 +1345,38 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
+                        "type": "string",
+                        "description": "Opaque nextPageCursor from a previous response; keeps millisecond ties. Wins over cursor when both are sent",
+                        "name": "pageCursor",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "lastSeen",
+                            "name",
+                            "type",
+                            "neighbors"
+                        ],
+                        "type": "string",
+                        "description": "Order: lastSeen (default), name, type or neighbors. Unnamed nodes come last in either name order; other ties go newest first, lastSeen ties by id. Page any order but lastSeen desc with pageCursor only",
+                        "name": "sort",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "asc",
+                            "desc"
+                        ],
+                        "type": "string",
+                        "description": "asc or desc. Defaults to asc, but to desc (newest first) for lastSeen; lastSeen asc lists the oldest heard first",
+                        "name": "order",
+                        "in": "query"
+                    },
+                    {
+                        "maximum": 2000,
+                        "minimum": 1,
                         "type": "integer",
-                        "description": "Max results (default 20, max 100)",
+                        "description": "Max results (default 50); must be positive, values above 2000 are clamped",
                         "name": "limit",
                         "in": "query"
                     }
@@ -593,7 +1385,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_PublicNodeSummary"
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PublicNodePage"
                         }
                     },
                     "400": {
@@ -604,6 +1396,12 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
@@ -644,6 +1442,76 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    }
+                }
+            }
+        },
+        "/nodes/{nodeId}/activity": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Nodes"
+                ],
+                "summary": "Get hourly heard-activity for the packets a node originated",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Node UUID",
+                        "name": "nodeId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Trailing window as a Go duration, max 720h (default 24h)",
+                        "name": "range",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.NodeActivity"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
@@ -690,12 +1558,19 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
                     }
                 }
             }
         },
         "/nodes/{nodeId}/observations": {
             "get": {
+                "description": "Newest packet first (by first hearing), then that packet's newest observation; observation ids do not descend across packets.",
                 "produces": [
                     "application/json"
                 ],
@@ -713,13 +1588,15 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "Observation ID of last item for pagination",
+                        "description": "nextCursor of the previous page (its last observation ID). A cursor whose observation has been deleted returns an empty last page",
                         "name": "cursor",
                         "in": "query"
                     },
                     {
+                        "maximum": 200,
+                        "minimum": 1,
                         "type": "integer",
-                        "description": "Max results (default 20, max 100)",
+                        "description": "Max results (default 50); must be positive, values above 200 are clamped",
                         "name": "limit",
                         "in": "query"
                     }
@@ -728,7 +1605,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_PublicPacketObservationSummary"
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_PacketObservationSummary"
                         }
                     },
                     "400": {
@@ -739,6 +1616,12 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
@@ -812,13 +1695,21 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "last_seen epoch ms of last item for pagination",
+                        "description": "last_seen epoch ms of the last item",
                         "name": "cursor",
                         "in": "query"
                     },
                     {
+                        "type": "string",
+                        "description": "Opaque nextPageCursor from a previous response; keeps millisecond ties. Wins over cursor when both are sent",
+                        "name": "pageCursor",
+                        "in": "query"
+                    },
+                    {
+                        "maximum": 200,
+                        "minimum": 1,
                         "type": "integer",
-                        "description": "Max results (default 20, max 100)",
+                        "description": "Max results (default 50); must be positive, values above 200 are clamped",
                         "name": "limit",
                         "in": "query"
                     }
@@ -827,7 +1718,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_PublicObserverSummary"
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PublicObserverPage"
                         }
                     },
                     "400": {
@@ -838,6 +1729,139 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    }
+                }
+            }
+        },
+        "/observers/directory": {
+            "get": {
+                "description": "Defaults to the trailing seven days through request time. Counts combine completed whole-hour analytics with retained observations for other hours and exact boundary slices. Incomplete history still returns numeric counts and the requested sort; coverage describes available history. Repeat filters and the returned windowStart/windowEnd as since/until with the cursor on later pages. Results may move as data changes; refresh without bounds for a new rolling window.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Observers"
+                ],
+                "summary": "List observers with windowed traffic counts",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Single IATA",
+                        "name": "iata",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Comma-separated IATAs",
+                        "name": "iatas",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Region ID",
+                        "name": "regionId",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Region slug",
+                        "name": "region",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Observer type",
+                        "name": "type",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Broker membership",
+                        "name": "broker",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "online or offline",
+                        "name": "status",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Case-insensitive partial name",
+                        "name": "name",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Transport scope membership",
+                        "name": "scope",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "traffic (default) or name",
+                        "name": "sort",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "format": "int64",
+                        "description": "Inclusive epoch ms, preserved exactly; default seven days before until; maximum window 31 days",
+                        "name": "since",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "format": "int64",
+                        "description": "Exclusive epoch ms, preserved exactly; default request time",
+                        "name": "until",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "format": "int64",
+                        "description": "nextCursor returned by preceding page",
+                        "name": "cursor",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page size, default 50, maximum 200",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ObserverDirectory"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
@@ -881,6 +1905,88 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    }
+                }
+            }
+        },
+        "/observers/{observerId}/activity": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Observers"
+                ],
+                "summary": "Get observer heard-activity history",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Observer UUID",
+                        "name": "observerId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Trailing window as a Go duration, max 720h (default 24h); max 48h when interval is under 1h",
+                        "name": "range",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Bucket size: 5m, 15m, 1h, 6h or 24h (default 15m)",
+                        "name": "interval",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Optional exclusive end in epoch milliseconds; aligned down to a complete bucket, at most 30 days old. Activity uses this window; summary freshness/latestRecordedAt and the last complete hour are measured at response generation time, independently of until.",
+                        "name": "until",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ObserverActivity"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
                     }
                 }
             }
@@ -909,8 +2015,10 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
+                        "maximum": 200,
+                        "minimum": 1,
                         "type": "integer",
-                        "description": "Max results (default 20, max 100)",
+                        "description": "Max results (default 50); must be positive, values above 200 are clamped",
                         "name": "limit",
                         "in": "query"
                     }
@@ -919,7 +2027,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_PublicAdvertObservation"
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_AdvertObservation"
                         }
                     },
                     "400": {
@@ -930,6 +2038,12 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "Not available yet, or the server is busy: retry after Retry-After seconds",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
@@ -988,6 +2102,12 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
@@ -1085,14 +2205,28 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "epoch ms of last item for pagination; last_heard_at, or site-local heard_at when iatas is set",
+                        "description": "epoch ms of the last item: its last_heard_at, or its site-local heard_at when iatas, iata, region or regionId is set (with hashPrefix always last_heard_at). Prefer pageCursor where nextPageCursor is returned",
                         "name": "cursor",
                         "in": "query"
                     },
                     {
+                        "type": "string",
+                        "description": "Opaque nextPageCursor from a previous response; keeps millisecond ties and wins over cursor when both are sent. A region page served without nextPageCursor pages by cursor: there cursor wins, and a pageCursor sent alone pages by its millisecond. Ignored with hashPrefix, which pages by cursor",
+                        "name": "pageCursor",
+                        "in": "query"
+                    },
+                    {
+                        "maximum": 200,
+                        "minimum": 1,
                         "type": "integer",
-                        "description": "Max results (default 20, max 100)",
+                        "description": "Max results (default 50); must be positive, values above 200 are clamped",
                         "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Match packets whose hash starts with this hex prefix (4-16 chars). Ordering and cursor use global last_heard_at even when iatas is set",
+                        "name": "hashPrefix",
                         "in": "query"
                     }
                 ],
@@ -1100,7 +2234,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_PublicPacketSummary"
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PublicPacketPage"
                         }
                     },
                     "400": {
@@ -1111,6 +2245,12 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "Not available yet, or the server is busy: retry after Retry-After seconds",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
@@ -1178,8 +2318,10 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
+                        "maximum": 200,
+                        "minimum": 1,
                         "type": "integer",
-                        "description": "Max results (default 20, max 100)",
+                        "description": "Max results (default 100); must be positive, values above 200 are clamped",
                         "name": "limit",
                         "in": "query"
                     }
@@ -1190,7 +2332,7 @@ const docTemplate = `{
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PublicPacketSummary"
+                                "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PacketSummary"
                             }
                         }
                     },
@@ -1202,6 +2344,12 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
@@ -1251,12 +2399,19 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
                     }
                 }
             }
         },
         "/regions": {
             "get": {
+                "description": "Each region carries its detail and member IATAs, the same as GET /regions/{regionId}.",
                 "produces": [
                     "application/json"
                 ],
@@ -1270,12 +2425,18 @@ const docTemplate = `{
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.RegionSummary"
+                                "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.Region"
                             }
                         }
                     },
-                    "404": {
-                        "description": "Not Found",
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
@@ -1319,12 +2480,25 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
                     }
                 }
             }
         },
         "/routes": {
             "get": {
+                "description": "Newest first. iatas filters by several IATA codes and takes precedence over the single iata, which\nis matched exactly as given. With neither, every IATA's routes are listed.",
                 "produces": [
                     "application/json"
                 ],
@@ -1335,7 +2509,13 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Filter by IATA code",
+                        "description": "Comma-separated IATA codes (max 100)",
+                        "name": "iatas",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Single IATA code (when iatas is omitted)",
                         "name": "iata",
                         "in": "query"
                     },
@@ -1353,7 +2533,15 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "Max results (default 20, max 100)",
+                        "description": "id of the last item; with cursor, also returns later routes sharing that millisecond",
+                        "name": "cursorId",
+                        "in": "query"
+                    },
+                    {
+                        "maximum": 200,
+                        "minimum": 1,
+                        "type": "integer",
+                        "description": "Max results (default 50); must be positive, values above 200 are clamped",
                         "name": "limit",
                         "in": "query"
                     }
@@ -1368,8 +2556,20 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
@@ -1379,6 +2579,7 @@ const docTemplate = `{
         },
         "/routes/cross": {
             "get": {
+                "description": "Pass iatas (comma-separated, optional; omitted searches every IATA) or the\nsingle directed pair fromIata/toIata, not both.",
                 "produces": [
                     "application/json"
                 ],
@@ -1389,31 +2590,35 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Source node hash prefix (hex)",
+                        "description": "Source node hash prefix (hex, 1-4 bytes)",
                         "name": "fromHash",
                         "in": "query",
                         "required": true
                     },
                     {
                         "type": "string",
-                        "description": "Source IATA code",
-                        "name": "fromIata",
-                        "in": "query",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Destination node hash prefix (hex)",
+                        "description": "Destination node hash prefix (hex, 1-4 bytes)",
                         "name": "toHash",
                         "in": "query",
                         "required": true
                     },
                     {
                         "type": "string",
-                        "description": "Destination IATA code",
+                        "description": "Comma-separated IATA codes to search (2-100)",
+                        "name": "iatas",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Source IATA code (with toIata)",
+                        "name": "fromIata",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Destination IATA code (with fromIata)",
                         "name": "toIata",
-                        "in": "query",
-                        "required": true
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -1437,12 +2642,19 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
                     }
                 }
             }
         },
         "/routes/search": {
             "get": {
+                "description": "Routes within one IATA that run from the source hash to the destination hash,\ntrimmed to that span. iatas is optional (omitted searches every IATA); the single\niata is still accepted. At most 500, shortest first.",
                 "produces": [
                     "application/json"
                 ],
@@ -1453,21 +2665,26 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "IATA code to search within",
-                        "name": "iata",
-                        "in": "query",
-                        "required": true
+                        "description": "Comma-separated IATA codes to search (max 100)",
+                        "name": "iatas",
+                        "in": "query"
                     },
                     {
                         "type": "string",
-                        "description": "Source node hash prefix (hex)",
+                        "description": "Single IATA code (when iatas is omitted)",
+                        "name": "iata",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Source node hash prefix (hex, 1-4 bytes)",
                         "name": "from",
                         "in": "query",
                         "required": true
                     },
                     {
                         "type": "string",
-                        "description": "Destination node hash prefix (hex)",
+                        "description": "Destination node hash prefix (hex, 1-4 bytes)",
                         "name": "to",
                         "in": "query",
                         "required": true
@@ -1494,12 +2711,111 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    }
+                }
+            }
+        },
+        "/routes/{iata}/{pathKey}/observations": {
+            "get": {
+                "description": "Matches the saved IATA, complete path bytes and hash width. Excludes TRACE and unclassified reports; other widths and search-result subsegments are not included. Byte matches do not prove hop identities or delivery. The route and its historical counter can outlive raw evidence. Cursors retain full timestamp precision and pin route/window scope.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Routes"
+                ],
+                "summary": "Get retained reports matching a full saved route prefix sequence",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Three-character IATA code",
+                        "name": "iata",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Stable 32-hex pathKey from a known-route response",
+                        "name": "pathKey",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Server-anchored duration (default 24h, max 720h); exclusive with since/until/pageCursor",
+                        "name": "range",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Window start epoch ms; provide with until (default last 24h)",
+                        "name": "since",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Exclusive window end epoch ms; maximum span 30d, end may be up to 5 minutes ahead of server time (clock skew tolerance)",
+                        "name": "until",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Opaque precise cursor from nextPageCursor; window is pinned",
+                        "name": "pageCursor",
+                        "in": "query"
+                    },
+                    {
+                        "maximum": 200,
+                        "minimum": 1,
+                        "type": "integer",
+                        "description": "Default 50; positive, capped at 200",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.RouteEvidence"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "The lookup took too long: retry after Retry-After seconds",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
                     }
                 }
             }
         },
         "/scopes": {
             "get": {
+                "description": "Without filters, lists every stored scope name, including imported names retained after an importer is disabled or a source is removed. With IATA or region filters, lists only manual scopes configured for a matching region and imported scopes whose current MeshMapper catalogue includes a matching IATA; observed traffic does not add scopes.",
                 "produces": [
                     "application/json"
                 ],
@@ -1531,11 +2847,26 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "type": "object"
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
@@ -1545,6 +2876,7 @@ const docTemplate = `{
         },
         "/scopes/{name}": {
             "get": {
+                "description": "packetCount sums packets per hour across every retained rollup hour; iatas are the IATAs that heard the scope's packets. Observer and node counts are current memberships.",
                 "produces": [
                     "application/json"
                 ],
@@ -1576,6 +2908,12 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
@@ -1612,8 +2950,10 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
+                        "maximum": 200,
+                        "minimum": 1,
                         "type": "integer",
-                        "description": "Max results (default 20, max 100)",
+                        "description": "Max results (default 10); must be positive, values above 200 are clamped",
                         "name": "limit",
                         "in": "query"
                     }
@@ -1630,6 +2970,12 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
@@ -1681,19 +3027,26 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
                     }
                 }
             }
         },
         "/stats/observations": {
             "get": {
+                "description": "Observation counts only; distinct packet and observer counts don't sum across IATAs, so read them from /stats/series.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "Stats"
                 ],
-                "summary": "Hourly observation time series",
+                "summary": "Hourly observation counts per IATA",
                 "parameters": [
                     {
                         "type": "string",
@@ -1735,19 +3088,118 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
                     }
                 }
             }
         },
-        "/stats/overview": {
+        "/stats/observer-comparison": {
             "get": {
+                "description": "Counts distinct retained packet hashes with route type 0 or 1, using reception time in [since, until). onlyA, onlyB and both partition totalPackets (the union). Repeated receptions count once. These are reported receptions, not a measure of radio packet loss or continuous observer coverage.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "Stats"
                 ],
-                "summary": "Network overview stats (last 24h)",
+                "summary": "Compare flood packets reported by two observers",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "First observer UUID",
+                        "name": "observerA",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Second, distinct observer UUID",
+                        "name": "observerB",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Inclusive start, epoch milliseconds (0 through 253402300799999)",
+                        "name": "since",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Exclusive end, epoch milliseconds; later than since",
+                        "name": "until",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Comma-separated reception IATA codes",
+                        "name": "iatas",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Region ID, expands to member IATAs",
+                        "name": "regionId",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Region slug, expands to member IATAs",
+                        "name": "region",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ObserverComparison"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    }
+                }
+            }
+        },
+        "/stats/overview": {
+            "get": {
+                "description": "Summarises the 24 most recent hours that can have been rolled (an hour rolls about 95 minutes after it closes); since/until report that window. Packets count once per hour heard. Use /stats/series for sparklines.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Stats"
+                ],
+                "summary": "Network overview stats (last 24 rolled hours)",
                 "parameters": [
                     {
                         "type": "string",
@@ -1777,6 +3229,84 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    }
+                }
+            }
+        },
+        "/stats/paths": {
+            "get": {
+                "description": "Counts stored receptions in [since, until), at most 30 days. Hash widths count only validated nonempty ordinary header paths (1/2/3 bytes). Empty paths do not vote for a width. TRACE header paths contain signal readings and are separate. Missing payload type or inconsistent/unsupported path metadata is unclassified. The four categories partition total receptions. Flood paths accumulate entries; direct paths contain remaining entries, so counts do not measure distance or a complete traversed route. Both boundaries round down to UTC hours and the response reports that effective window. Reads the hourly path rollup; an hour appears only after it is rolled, about 95 minutes after it ends, and hours without data are omitted.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Stats"
+                ],
+                "summary": "Received path-entry and hash-width distributions",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Inclusive start, epoch milliseconds (0 through 253402300799999)",
+                        "name": "since",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Exclusive end, epoch milliseconds; at most 30 days after since",
+                        "name": "until",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Comma-separated reception IATA codes",
+                        "name": "iatas",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Region ID, expands to member IATAs",
+                        "name": "regionId",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Region slug, expands to member IATAs",
+                        "name": "region",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PathStats"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
@@ -1834,6 +3364,12 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
                     }
                 }
             }
@@ -1888,12 +3424,19 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
                     }
                 }
             }
         },
         "/stats/scopes": {
             "get": {
+                "description": "Packets are those heard since the window start, each counted once per hour however many of the requested IATAs heard it. Observers and nodes are current memberships: observers filter by the IATA they last reported from, nodes by their IATA memberships. hourly splits packetCount by UTC hour and adds the distinct observers and advertising nodes active in the scope each hour (empty hours omitted; outage gaps come from /stats/series hour status). With filters, lists only manual scopes configured for a matching region and imported scopes whose current MeshMapper catalogue includes a matching IATA; those remain listed with zero counts. An empty region returns an empty array.",
                 "produces": [
                     "application/json"
                 ],
@@ -1901,6 +3444,38 @@ const docTemplate = `{
                     "Stats"
                 ],
                 "summary": "Scope statistics",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Comma-separated IATA codes",
+                        "name": "iatas",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Single IATA code; used when iatas is absent",
+                        "name": "iata",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Filter by region ID, expands to member IATAs",
+                        "name": "regionId",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by region slug, expands to member IATAs; combined with explicit IATAs",
+                        "name": "region",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Start of packet window epoch ms, rounded down to the hour (default 7 days ago)",
+                        "name": "since",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -1911,8 +3486,164 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    }
+                }
+            }
+        },
+        "/stats/series": {
+            "get": {
+                "description": "One entry per UTC hour in [since, until) plus a summary over the complete hours. Both bounds round down to UTC hours and since is clamped to the rollup retention; the response reports the effective window. An hour is rolled about 95 minutes after it closes, so recent hours are \"missing\" until then; \"partial\" hours lost raw rows before they could be rolled and never get values. Counts (observations, packets) sum across hours, with a packet counted once in each hour it was heard; observers, IATAs and scopes are distinct across the whole window; averages are sum / samples. revision changes whenever any rolled hour changes.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Stats"
+                ],
+                "summary": "Hourly network activity from the analytics rollups",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Inclusive start, epoch milliseconds",
+                        "name": "since",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Exclusive end, epoch milliseconds; the window is at most the rollup retention (default 90 days)",
+                        "name": "until",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Comma-separated reception IATA codes",
+                        "name": "iatas",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Region ID, expands to member IATAs",
+                        "name": "regionId",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Region slug, expands to member IATAs",
+                        "name": "region",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.StatsSeries"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    }
+                }
+            }
+        },
+        "/stats/signal": {
+            "get": {
+                "description": "Aggregates stored observer receptions in [since, until), at most 30 days. SNR is dB; RSSI is dBm. Null/non-finite readings and the zero/zero unavailable sentinel are excluded per metric; actual zero SNR with nonzero RSSI remains valid. Averages are null without samples. Histogram bounds are lower-inclusive/upper-exclusive, with null for unbounded ends. Both boundaries round down to UTC hours and the response reports that effective window. Reads the hourly signal rollup; an hour appears only after it is rolled, about 95 minutes after it ends, and hours without data are omitted. These last-hop readings do not measure end-to-end quality or packet loss.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Stats"
+                ],
+                "summary": "Reception signal distributions and hourly trends",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Inclusive start, epoch milliseconds (0 through 253402300799999)",
+                        "name": "since",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Exclusive end, epoch milliseconds; at most 30 days after since",
+                        "name": "until",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Comma-separated reception IATA codes",
+                        "name": "iatas",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Region ID, expands to member IATAs",
+                        "name": "regionId",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Region slug, expands to member IATAs",
+                        "name": "region",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.SignalStats"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
@@ -1922,13 +3653,14 @@ const docTemplate = `{
         },
         "/stats/top-advertisers": {
             "get": {
+                "description": "Ranks by the sort count, ties broken by total adverts then public key. Each advert counts once per hour heard, however many requested IATAs heard it. nodeId is null when the node row has been deleted.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "Stats"
                 ],
-                "summary": "Top N nodes by distinct ADVERT packet count (last 24h by default)",
+                "summary": "Top N nodes by distinct flood or direct ADVERT packet count (last 24h by default)",
                 "parameters": [
                     {
                         "type": "string",
@@ -1955,10 +3687,23 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
+                        "maximum": 200,
+                        "minimum": 1,
                         "type": "integer",
-                        "description": "Max results (default 20, max 100)",
+                        "description": "Max results (default 10); must be positive, values above 200 are clamped",
                         "name": "limit",
                         "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "flood",
+                            "direct"
+                        ],
+                        "type": "string",
+                        "description": "Rank by flood or direct advert count",
+                        "name": "sort",
+                        "in": "query",
+                        "required": true
                     }
                 ],
                 "responses": {
@@ -1971,8 +3716,20 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
@@ -1982,13 +3739,14 @@ const docTemplate = `{
         },
         "/stats/top-nodes": {
             "get": {
+                "description": "nodeId is null when the node row has been deleted; publicKey always identifies it.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "Stats"
                 ],
-                "summary": "Top N nodes by observation count (from materialized view)",
+                "summary": "Top N nodes by advert hearings (last 7 days by default)",
                 "parameters": [
                     {
                         "type": "string",
@@ -2010,7 +3768,15 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "Max results (default 20, max 100)",
+                        "description": "Start of window epoch ms, rounded down to the hour (default 7 days ago)",
+                        "name": "since",
+                        "in": "query"
+                    },
+                    {
+                        "maximum": 200,
+                        "minimum": 1,
+                        "type": "integer",
+                        "description": "Max results (default 10); must be positive, values above 200 are clamped",
                         "name": "limit",
                         "in": "query"
                     }
@@ -2027,6 +3793,12 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
@@ -2069,8 +3841,10 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
+                        "maximum": 200,
+                        "minimum": 1,
                         "type": "integer",
-                        "description": "Max results (default 20, max 100)",
+                        "description": "Max results (default 10); must be positive, values above 200 are clamped",
                         "name": "limit",
                         "in": "query"
                     }
@@ -2087,6 +3861,12 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
@@ -2129,8 +3909,10 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
+                        "maximum": 200,
+                        "minimum": 1,
                         "type": "integer",
-                        "description": "Max results (default 20, max 100)",
+                        "description": "Max results (default 10); must be positive, values above 200 are clamped",
                         "name": "limit",
                         "in": "query"
                     }
@@ -2147,6 +3929,12 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
@@ -2184,13 +3972,13 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Filter by transport scope name",
+                        "description": "Filter by the tag's first transport scope name",
                         "name": "scope",
                         "in": "query"
                     },
                     {
                         "type": "string",
-                        "description": "Filter by type: TRACE or PING (default: all)",
+                        "description": "Filter by type: TRACE (any multi-hop packet) or PING (default: all)",
                         "name": "type",
                         "in": "query"
                     },
@@ -2208,13 +3996,21 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "last_heard_at epoch ms of last item for pagination",
+                        "description": "lastHeardAt (epoch ms) of the last item; returns older tags",
                         "name": "cursor",
                         "in": "query"
                     },
                     {
+                        "type": "string",
+                        "description": "traceTag (hex) of the last item; with cursor, also returns later tags sharing that millisecond",
+                        "name": "cursorTag",
+                        "in": "query"
+                    },
+                    {
+                        "maximum": 200,
+                        "minimum": 1,
                         "type": "integer",
-                        "description": "Max results (default 20, max 100)",
+                        "description": "Max results (default 50); must be positive, values above 200 are clamped",
                         "name": "limit",
                         "in": "query"
                     }
@@ -2229,8 +4025,20 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
@@ -2274,12 +4082,227 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.APIError"
                         }
+                    },
+                    "503": {
+                        "description": "The read took too long: retry after Retry-After seconds",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.APIError"
+                        }
+                    }
+                }
+            }
+        },
+        "/ws-ticket": {
+            "get": {
+                "description": "For clients that send no Origin header, such as BEACON Mobile. Send the ticket in the\nX-Beacon-Ticket header of the /ws upgrade. It works for 60 seconds, from the same client\naddress (IPv6: the same /64), and only on this server process. Required only when\nwebsocket.require_origin is on; browsers never need one.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Info"
+                ],
+                "summary": "Ticket for opening /ws without an Origin",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.WSTicket"
+                        }
                     }
                 }
             }
         }
     },
     "definitions": {
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.Account": {
+            "type": "object",
+            "properties": {
+                "active": {
+                    "type": "boolean"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "deactivated_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.AccountList": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.Account"
+                    }
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.AdminAuthConfig": {
+            "type": "object",
+            "properties": {
+                "configured": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.AdminCORSConfig": {
+            "type": "object",
+            "properties": {
+                "allow_credentials": {
+                    "type": "boolean"
+                },
+                "allowed_headers": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "allowed_methods": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "allowed_origins": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "max_age": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.AdminConfig": {
+            "type": "object",
+            "properties": {
+                "auth": {
+                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.AdminAuthConfig"
+                },
+                "cors": {
+                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.AdminCORSConfig"
+                },
+                "guards": {
+                    "description": "absent when database guards are not configured",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.AdminGuardsConfig"
+                        }
+                    ]
+                },
+                "ingest": {
+                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.AdminIngestConfig"
+                },
+                "mobile": {
+                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.AdminMobileConfig"
+                },
+                "web": {
+                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.AdminWebConfig"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.AdminGuardsConfig": {
+            "type": "object",
+            "properties": {
+                "api_plan_layout": {
+                    "description": "custom_all, split or single",
+                    "type": "string"
+                },
+                "budget": {
+                    "description": "always \"shadow\"",
+                    "type": "string"
+                },
+                "enforce": {
+                    "description": "families currently enforced; the configuration file is the boot default",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "observe_only": {
+                    "description": "the single plan layout makes every family observe",
+                    "type": "boolean"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.AdminIngestConfig": {
+            "type": "object",
+            "properties": {
+                "broker_count": {
+                    "description": "BrokerCount counts configured broker workers, not active MQTT connections\nor a configurable processing-worker pool.",
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.AdminMobileConfig": {
+            "type": "object",
+            "properties": {
+                "min_app_version": {
+                    "description": "effective floor; empty means no requirement",
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.AdminWebConfig": {
+            "type": "object",
+            "properties": {
+                "min_web_version": {
+                    "description": "effective floor; empty means no requirement",
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.AdvertObservation": {
+            "type": "object",
+            "properties": {
+                "heardAt": {
+                    "description": "epoch ms",
+                    "type": "integer"
+                },
+                "hopCount": {
+                    "type": "integer"
+                },
+                "iata": {
+                    "type": "string"
+                },
+                "id": {
+                    "description": "observation ID, use as cursor for pagination",
+                    "type": "integer"
+                },
+                "nodeName": {
+                    "type": "string"
+                },
+                "nodePublicKey": {
+                    "description": "hex-encoded",
+                    "type": "string"
+                },
+                "packetHash": {
+                    "description": "hex-encoded",
+                    "type": "string"
+                },
+                "payloadType": {
+                    "type": "integer"
+                },
+                "payloadTypeName": {
+                    "type": "string"
+                },
+                "rssi": {
+                    "type": "integer"
+                },
+                "snr": {
+                    "type": "number"
+                }
+            }
+        },
         "github_com_MeshCore-Beacon_beacon-server_internal_api.Channel": {
             "type": "object",
             "properties": {
@@ -2311,6 +4334,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "messageCount": {
+                    "description": "lifetime count; not reduced by retention",
                     "type": "integer"
                 },
                 "name": {
@@ -2341,6 +4365,19 @@ const docTemplate = `{
                     "description": "hex-encoded packet hash for correlation with packet events",
                     "type": "string"
                 },
+                "scope": {
+                    "description": "matched scope on the first stored packet; null when none was recorded",
+                    "type": "string"
+                },
+                "scopeStatus": {
+                    "type": "string",
+                    "enum": [
+                        "matched",
+                        "unscoped",
+                        "unknown",
+                        "unavailable"
+                    ]
+                },
                 "senderName": {
                     "description": "display name from the decrypted payload",
                     "type": "string"
@@ -2348,6 +4385,26 @@ const docTemplate = `{
                 "sentAt": {
                     "description": "epoch ms, from the sender's embedded timestamp",
                     "type": "integer"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.ChannelPage": {
+            "type": "object",
+            "properties": {
+                "hasMore": {
+                    "type": "boolean"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ChannelSummary"
+                    }
+                },
+                "nextCursor": {
+                    "type": "integer"
+                },
+                "nextPageCursor": {
+                    "type": "string"
                 }
             }
         },
@@ -2407,6 +4464,17 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "nodeTypeName": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.CreateAccountRequest": {
+            "type": "object",
+            "required": [
+                "name"
+            ],
+            "properties": {
+                "name": {
                     "type": "string"
                 }
             }
@@ -2472,6 +4540,48 @@ const docTemplate = `{
                 }
             }
         },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.DBStatement": {
+            "type": "object",
+            "properties": {
+                "calls": {
+                    "type": "integer"
+                },
+                "exec_ms": {
+                    "type": "number"
+                },
+                "name": {
+                    "description": "sqlc statement name; \"(unnamed)\" aggregates the rest",
+                    "type": "string"
+                },
+                "plan_ms": {
+                    "description": "0 unless pg_stat_statements.track_planning is on",
+                    "type": "number"
+                },
+                "rows": {
+                    "type": "integer"
+                },
+                "shared_hit": {
+                    "type": "integer"
+                },
+                "shared_read": {
+                    "type": "integer"
+                },
+                "wal_bytes": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.DBStatementsResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.DBStatement"
+                    }
+                }
+            }
+        },
         "github_com_MeshCore-Beacon_beacon-server_internal_api.IATA": {
             "type": "object",
             "properties": {
@@ -2486,6 +4596,25 @@ const docTemplate = `{
                 },
                 "lon": {
                     "type": "number"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.Info": {
+            "type": "object",
+            "properties": {
+                "minAppVersion": {
+                    "description": "MinAppVersion is the oldest allowed app version (X.Y.Z); null means no requirement.",
+                    "type": "string",
+                    "example": "0.1.1"
+                },
+                "minWebVersion": {
+                    "description": "MinWebVersion is the oldest allowed Beacon Web version (X.Y.Z); null means no requirement.",
+                    "type": "string",
+                    "example": "2.0.3"
+                },
+                "serverVersion": {
+                    "type": "string",
+                    "example": "2.0.2"
                 }
             }
         },
@@ -2517,6 +4646,215 @@ const docTemplate = `{
                 },
                 "observationCount": {
                     "type": "integer"
+                },
+                "pathKey": {
+                    "description": "stable identity within this IATA; use for route evidence links",
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.MeshMapperDefaultScope": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "source": {
+                    "description": "advert or reported",
+                    "type": "string"
+                },
+                "state": {
+                    "description": "named, unknown (set but not nameable yet) or none",
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.MeshMapperRepeater": {
+            "type": "object",
+            "properties": {
+                "admins": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "carpeater": {
+                    "description": "mobile repeater: its position moves",
+                    "type": "boolean"
+                },
+                "defaultScope": {
+                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.MeshMapperDefaultScope"
+                },
+                "fetchedAt": {
+                    "description": "when Beacon last fetched this list",
+                    "type": "integer"
+                },
+                "iata": {
+                    "description": "region of its latest advert, per MeshMapper",
+                    "type": "string"
+                },
+                "scopes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.MeshMapperScope"
+                    }
+                },
+                "scopesCheckedAt": {
+                    "description": "set (with empty scopes) when it answered with none",
+                    "type": "integer"
+                },
+                "site": {
+                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.MeshMapperSite"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.MeshMapperScope": {
+            "type": "object",
+            "properties": {
+                "observedAt": {
+                    "description": "seen forwarding scoped traffic",
+                    "type": "integer"
+                },
+                "observedPackets": {
+                    "type": "integer"
+                },
+                "proof": {
+                    "description": "multibyte or floor",
+                    "type": "string"
+                },
+                "reportedAt": {
+                    "description": "an observer asked it",
+                    "type": "integer"
+                },
+                "scope": {
+                    "type": "string"
+                },
+                "uploadedAt": {
+                    "description": "a wardriver's app asked it",
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.MeshMapperSite": {
+            "type": "object",
+            "properties": {
+                "antenna": {
+                    "type": "string"
+                },
+                "hardware": {
+                    "type": "string"
+                },
+                "heightAslM": {
+                    "description": "antenna above mean sea level",
+                    "type": "number"
+                },
+                "heightM": {
+                    "description": "antenna above ground",
+                    "type": "number"
+                },
+                "notes": {
+                    "type": "string"
+                },
+                "power": {
+                    "type": "string"
+                },
+                "powerSource": {
+                    "description": "mains, solar, battery or poe",
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.NodeActivity": {
+            "type": "object",
+            "properties": {
+                "generatedAt": {
+                    "type": "integer"
+                },
+                "latest": {
+                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.NodeActivityLatest"
+                },
+                "points": {
+                    "description": "ascending, only hours with observations",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.NodeActivityPoint"
+                    }
+                },
+                "range": {
+                    "type": "string"
+                },
+                "rawFrom": {
+                    "description": "start of the raw tail, epoch ms",
+                    "type": "integer"
+                },
+                "rolledUntil": {
+                    "description": "Hours before rolledUntil come from rollups and from rawFrom on from raw rows; when rawFrom is later, the\nhours between are uncovered, not quiet.",
+                    "type": "integer"
+                },
+                "summary": {
+                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.NodeActivitySummary"
+                },
+                "windowEnd": {
+                    "description": "exclusive, epoch ms; the last hour is still filling",
+                    "type": "integer"
+                },
+                "windowStart": {
+                    "description": "inclusive, epoch ms, on the hour",
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.NodeActivityLatest": {
+            "type": "object",
+            "properties": {
+                "heardAt": {
+                    "description": "epoch ms",
+                    "type": "integer"
+                },
+                "packetHash": {
+                    "description": "hex",
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.NodeActivityPoint": {
+            "type": "object",
+            "properties": {
+                "hopAvg": {
+                    "type": "number"
+                },
+                "observations": {
+                    "type": "integer"
+                },
+                "rssiAvg": {
+                    "type": "number"
+                },
+                "snrAvg": {
+                    "type": "number"
+                },
+                "t": {
+                    "description": "hour start, epoch ms",
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.NodeActivitySummary": {
+            "type": "object",
+            "properties": {
+                "hopAvg": {
+                    "type": "number"
+                },
+                "observations": {
+                    "type": "integer"
+                },
+                "rssiAvg": {
+                    "type": "number"
+                },
+                "snrAvg": {
+                    "type": "number"
                 }
             }
         },
@@ -2549,9 +4887,6 @@ const docTemplate = `{
         "github_com_MeshCore-Beacon_beacon-server_internal_api.ObservationPoint": {
             "type": "object",
             "properties": {
-                "activeObservers": {
-                    "type": "integer"
-                },
                 "hour": {
                     "description": "epoch ms, start of the 1-hour bucket",
                     "type": "integer"
@@ -2561,9 +4896,259 @@ const docTemplate = `{
                 },
                 "observationCount": {
                     "type": "integer"
-                },
-                "uniquePackets": {
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.ObserverActivity": {
+            "type": "object",
+            "properties": {
+                "generatedAt": {
+                    "description": "response computation time, not proof of continuous coverage",
                     "type": "integer"
+                },
+                "interval": {
+                    "type": "string"
+                },
+                "payloadTypes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PayloadBreakdownItem"
+                    }
+                },
+                "points": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ObserverActivityPoint"
+                    }
+                },
+                "radio": {
+                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ObserverActivityRadio"
+                },
+                "range": {
+                    "type": "string"
+                },
+                "rawFrom": {
+                    "description": "start of the raw tail, epoch ms",
+                    "type": "integer"
+                },
+                "rolledUntil": {
+                    "description": "Hourly only. Buckets before rolledUntil come from rollups and from rawFrom on from raw rows;\nwhen rawFrom is later, the hours between are uncovered, not quiet.",
+                    "type": "integer"
+                },
+                "source": {
+                    "description": "raw or hourly; missing records do not prove an outage",
+                    "type": "string"
+                },
+                "summary": {
+                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ObserverActivitySummary"
+                },
+                "windowEnd": {
+                    "description": "exclusive end, epoch ms; live requests include the current partial bucket",
+                    "type": "integer"
+                },
+                "windowStart": {
+                    "description": "inclusive complete-bucket start, epoch ms",
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.ObserverActivityPoint": {
+            "type": "object",
+            "properties": {
+                "airtimeMs": {
+                    "type": "number"
+                },
+                "observations": {
+                    "type": "integer"
+                },
+                "rssiAvg": {
+                    "type": "number"
+                },
+                "snrAvg": {
+                    "type": "number"
+                },
+                "snrMin": {
+                    "type": "number"
+                },
+                "t": {
+                    "description": "bucket start, epoch ms",
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.ObserverActivityRadio": {
+            "type": "object",
+            "properties": {
+                "bwKhz": {
+                    "type": "number"
+                },
+                "cr": {
+                    "type": "integer"
+                },
+                "freqMhz": {
+                    "type": "number"
+                },
+                "preambleSymbols": {
+                    "type": "integer"
+                },
+                "sf": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.ObserverActivitySummary": {
+            "type": "object",
+            "properties": {
+                "lastCompleteHour": {
+                    "type": "integer"
+                },
+                "lastCompleteHourEnd": {
+                    "type": "integer"
+                },
+                "lastCompleteHourStart": {
+                    "type": "integer"
+                },
+                "latestRecordedAt": {
+                    "type": "integer"
+                },
+                "recordedPackets": {
+                    "description": "stored observations within windowStart/windowEnd",
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.ObserverComparison": {
+            "type": "object",
+            "properties": {
+                "both": {
+                    "type": "integer"
+                },
+                "observerA": {
+                    "type": "string"
+                },
+                "observerB": {
+                    "type": "string"
+                },
+                "onlyA": {
+                    "type": "integer"
+                },
+                "onlyB": {
+                    "type": "integer"
+                },
+                "since": {
+                    "description": "inclusive, epoch milliseconds",
+                    "type": "integer"
+                },
+                "totalPackets": {
+                    "type": "integer"
+                },
+                "until": {
+                    "description": "exclusive, epoch milliseconds",
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.ObserverDirectory": {
+            "type": "object",
+            "properties": {
+                "coverage": {
+                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ObserverDirectoryCoverage"
+                },
+                "effectiveSort": {
+                    "type": "string"
+                },
+                "generatedAt": {
+                    "type": "integer"
+                },
+                "hasMore": {
+                    "type": "boolean"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ObserverDirectoryItem"
+                    }
+                },
+                "maxObservationCount": {
+                    "description": "Maximum over all matching observers, not only this page; zero when none match.",
+                    "type": "integer"
+                },
+                "nextCursor": {
+                    "type": "integer"
+                },
+                "observerTypes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "sort": {
+                    "type": "string"
+                },
+                "windowEnd": {
+                    "type": "integer"
+                },
+                "windowStart": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.ObserverDirectoryCoverage": {
+            "type": "object",
+            "properties": {
+                "completeHours": {
+                    "type": "integer"
+                },
+                "expectedHours": {
+                    "type": "integer"
+                },
+                "missingHours": {
+                    "type": "integer"
+                },
+                "partialHours": {
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.ObserverDirectoryItem": {
+            "type": "object",
+            "properties": {
+                "displayName": {
+                    "description": "friendly name from /status messages",
+                    "type": "string"
+                },
+                "iata": {
+                    "description": "most recently heard IATA",
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "observationCount": {
+                    "description": "Available observations in [windowStart, windowEnd), including zero with missing history.",
+                    "type": "integer"
+                },
+                "observerType": {
+                    "description": "e.g. \"meshcoretomqtt\", \"meshcoreha\"",
+                    "type": "string"
+                },
+                "radio": {
+                    "description": "friendly radio param string: freqMhz,BwKhz,SF e.g. \"910.525,62.5,7\"",
+                    "type": "string"
+                },
+                "scopes": {
+                    "description": "list of observer forwarded scopes matched to config",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "status": {
+                    "description": "\"online\" or \"offline\" derived from last_status_at",
+                    "type": "string"
                 }
             }
         },
@@ -2587,10 +5172,10 @@ const docTemplate = `{
         "github_com_MeshCore-Beacon_beacon-server_internal_api.ObserverTelemetryPoint": {
             "type": "object",
             "properties": {
-                "airtimeRxPct": {
+                "airtimeRxSecs": {
                     "type": "number"
                 },
-                "airtimeTxPct": {
+                "airtimeTxSecs": {
                     "type": "number"
                 },
                 "batteryMv": {
@@ -2643,6 +5228,79 @@ const docTemplate = `{
                 }
             }
         },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.PacketLatestObserver": {
+            "type": "object",
+            "properties": {
+                "displayName": {
+                    "type": "string"
+                },
+                "iata": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "pathBytes": {
+                    "description": "hex-encoded accumulated path hashes",
+                    "type": "string"
+                },
+                "pathLength": {
+                    "description": "PathLength/PathBytes and captured endpoint resolutions are stored on the observation,\nso list/backfill reads need no per-hash resolution queries. Legacy observations have\nno endpoint snapshot. ResolvedPath remains a detail/opted-in WS feature.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PacketPathLength"
+                        }
+                    ]
+                },
+                "resolvedDestination": {
+                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ResolvedHop"
+                },
+                "resolvedPath": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ResolvedHop"
+                    }
+                },
+                "resolvedSource": {
+                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ResolvedHop"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.PacketObservationSummary": {
+            "type": "object",
+            "properties": {
+                "heardAt": {
+                    "description": "epoch ms",
+                    "type": "integer"
+                },
+                "hopCount": {
+                    "type": "integer"
+                },
+                "iata": {
+                    "type": "string"
+                },
+                "id": {
+                    "description": "observation ID, use as cursor for pagination",
+                    "type": "integer"
+                },
+                "packetHash": {
+                    "description": "hex-encoded",
+                    "type": "string"
+                },
+                "payloadType": {
+                    "type": "integer"
+                },
+                "payloadTypeName": {
+                    "type": "string"
+                },
+                "rssi": {
+                    "type": "integer"
+                },
+                "snr": {
+                    "type": "number"
+                }
+            }
+        },
         "github_com_MeshCore-Beacon_beacon-server_internal_api.PacketPathLength": {
             "type": "object",
             "properties": {
@@ -2660,6 +5318,49 @@ const docTemplate = `{
                 }
             }
         },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.PacketSummary": {
+            "type": "object",
+            "properties": {
+                "firstHeardAt": {
+                    "description": "epoch ms",
+                    "type": "integer"
+                },
+                "lastHeardAt": {
+                    "description": "epoch ms",
+                    "type": "integer"
+                },
+                "latestObserver": {
+                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PacketLatestObserver"
+                },
+                "observationCount": {
+                    "type": "integer"
+                },
+                "packetHash": {
+                    "description": "hex-encoded",
+                    "type": "string"
+                },
+                "payloadType": {
+                    "type": "integer"
+                },
+                "payloadTypeName": {
+                    "type": "string"
+                },
+                "routeType": {
+                    "type": "integer"
+                },
+                "routeTypeName": {
+                    "type": "string"
+                },
+                "scope": {
+                    "description": "matched transport scope name e.g. \"#bc\"",
+                    "type": "string"
+                },
+                "summary": {
+                    "description": "advert name, or the ACK/TRACE/PING summary; omitted when unavailable",
+                    "type": "string"
+                }
+            }
+        },
         "github_com_MeshCore-Beacon_beacon-server_internal_api.PacketTransportCodes": {
             "type": "object",
             "properties": {
@@ -2671,7 +5372,7 @@ const docTemplate = `{
                 }
             }
         },
-        "github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_ChannelSummary": {
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_AdvertObservation": {
             "type": "object",
             "properties": {
                 "hasMore": {
@@ -2680,7 +5381,7 @@ const docTemplate = `{
                 "items": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ChannelSummary"
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.AdvertObservation"
                     }
                 },
                 "nextCursor": {
@@ -2688,7 +5389,7 @@ const docTemplate = `{
                 }
             }
         },
-        "github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_PublicAdvertObservation": {
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_PacketObservationSummary": {
             "type": "object",
             "properties": {
                 "hasMore": {
@@ -2697,7 +5398,7 @@ const docTemplate = `{
                 "items": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PublicAdvertObservation"
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PacketObservationSummary"
                     }
                 },
                 "nextCursor": {
@@ -2705,70 +5406,101 @@ const docTemplate = `{
                 }
             }
         },
-        "github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_PublicNodeSummary": {
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.PathHashWidth": {
             "type": "object",
             "properties": {
-                "hasMore": {
-                    "type": "boolean"
+                "bytes": {
+                    "type": "integer"
                 },
-                "items": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PublicNodeSummary"
-                    }
-                },
-                "nextCursor": {
+                "receptions": {
                     "type": "integer"
                 }
             }
         },
-        "github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_PublicObserverSummary": {
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.PathHour": {
             "type": "object",
             "properties": {
-                "hasMore": {
-                    "type": "boolean"
+                "empty": {
+                    "type": "integer"
                 },
-                "items": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PublicObserverSummary"
-                    }
+                "hour": {
+                    "type": "integer"
                 },
-                "nextCursor": {
+                "maxEntries": {
+                    "description": "longest path received that hour across the requested IATAs; 0 if only empty paths",
+                    "type": "integer"
+                },
+                "oneByte": {
+                    "type": "integer"
+                },
+                "receptions": {
+                    "type": "integer"
+                },
+                "threeByte": {
+                    "type": "integer"
+                },
+                "trace": {
+                    "type": "integer"
+                },
+                "twoByte": {
+                    "type": "integer"
+                },
+                "unclassified": {
                     "type": "integer"
                 }
             }
         },
-        "github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_PublicPacketObservationSummary": {
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.PathLengthBin": {
             "type": "object",
             "properties": {
-                "hasMore": {
-                    "type": "boolean"
+                "entries": {
+                    "type": "integer"
                 },
-                "items": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PublicPacketObservationSummary"
-                    }
-                },
-                "nextCursor": {
+                "receptions": {
                     "type": "integer"
                 }
             }
         },
-        "github_com_MeshCore-Beacon_beacon-server_internal_api.Page-github_com_MeshCore-Beacon_beacon-server_internal_api_PublicPacketSummary": {
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.PathStats": {
             "type": "object",
             "properties": {
-                "hasMore": {
-                    "type": "boolean"
+                "empty": {
+                    "type": "integer"
                 },
-                "items": {
+                "hashWidths": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PublicPacketSummary"
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PathHashWidth"
                     }
                 },
-                "nextCursor": {
+                "hashed": {
+                    "type": "integer"
+                },
+                "hourly": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PathHour"
+                    }
+                },
+                "pathLengths": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PathLengthBin"
+                    }
+                },
+                "receptions": {
+                    "type": "integer"
+                },
+                "since": {
+                    "type": "integer"
+                },
+                "trace": {
+                    "type": "integer"
+                },
+                "unclassified": {
+                    "type": "integer"
+                },
+                "until": {
                     "type": "integer"
                 }
             }
@@ -2787,41 +5519,78 @@ const docTemplate = `{
                 }
             }
         },
-        "github_com_MeshCore-Beacon_beacon-server_internal_api.PublicAdvertObservation": {
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.PlanguardReport": {
             "type": "object",
             "properties": {
-                "heardAt": {
-                    "type": "integer"
+                "clean": {
+                    "description": "no FALSE_POSITIVE, MISSED or ERROR",
+                    "type": "boolean"
                 },
-                "hopCount": {
-                    "type": "integer"
+                "counts": {
+                    "description": "verdict → runs",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
                 },
-                "iata": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "integer"
-                },
-                "nodeName": {
-                    "type": "string"
-                },
-                "nodePublicKey": {
-                    "type": "string"
-                },
-                "packetHash": {
-                    "type": "string"
-                },
-                "payloadType": {
-                    "type": "integer"
-                },
-                "payloadTypeName": {
-                    "type": "string"
-                },
-                "rssi": {
-                    "type": "integer"
-                },
-                "snr": {
+                "duration_ms": {
                     "type": "number"
+                },
+                "failures": {
+                    "description": "never null",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PlanguardRun"
+                    }
+                },
+                "runs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PlanguardRun"
+                    }
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "tier": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.PlanguardRun": {
+            "type": "object",
+            "properties": {
+                "drivers": {
+                    "description": "relation:node:index of each driving scan",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "entry": {
+                    "type": "string"
+                },
+                "failures": {
+                    "description": "the plan rules the run broke",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "mode": {
+                    "description": "custom or generic",
+                    "type": "string"
+                },
+                "skip": {
+                    "description": "why the run was not made",
+                    "type": "string"
+                },
+                "stmt": {
+                    "type": "string"
+                },
+                "verdict": {
+                    "description": "ok, DETECTED, MISSED, FALSE_POSITIVE, RETIRED_INDEX, KNOWN_ISSUE, SKIP or ERROR",
+                    "type": "string"
                 }
             }
         },
@@ -2873,6 +5642,9 @@ const docTemplate = `{
                 "locationSource": {
                     "type": "string"
                 },
+                "meshmapper": {
+                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.MeshMapperRepeater"
+                },
                 "minFirmwareVersion": {
                     "type": "string"
                 },
@@ -2899,6 +5671,9 @@ const docTemplate = `{
                 },
                 "observerId": {
                     "type": "string"
+                },
+                "possiblyForeign": {
+                    "type": "boolean"
                 },
                 "publicKey": {
                     "type": "string"
@@ -2972,6 +5747,32 @@ const docTemplate = `{
                 }
             }
         },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.PublicNodePage": {
+            "type": "object",
+            "properties": {
+                "hasMore": {
+                    "type": "boolean"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PublicNodeSummary"
+                    }
+                },
+                "nextCursor": {
+                    "type": "integer"
+                },
+                "nextPageCursor": {
+                    "type": "string"
+                },
+                "order": {
+                    "type": "string"
+                },
+                "sort": {
+                    "type": "string"
+                }
+            }
+        },
         "github_com_MeshCore-Beacon_beacon-server_internal_api.PublicNodeSummary": {
             "type": "object",
             "properties": {
@@ -2991,6 +5792,9 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "knownNeighborCount": {
+                    "type": "integer"
+                },
+                "lastSeen": {
                     "type": "integer"
                 },
                 "lat": {
@@ -3016,6 +5820,9 @@ const docTemplate = `{
                 },
                 "observerId": {
                     "type": "string"
+                },
+                "possiblyForeign": {
+                    "type": "boolean"
                 },
                 "publicKey": {
                     "type": "string"
@@ -3120,6 +5927,26 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.PublicObserverPage": {
+            "type": "object",
+            "properties": {
+                "hasMore": {
+                    "type": "boolean"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PublicObserverSummary"
+                    }
+                },
+                "nextCursor": {
+                    "type": "integer"
+                },
+                "nextPageCursor": {
                     "type": "string"
                 }
             }
@@ -3229,35 +6056,23 @@ const docTemplate = `{
                 }
             }
         },
-        "github_com_MeshCore-Beacon_beacon-server_internal_api.PublicPacketObservationSummary": {
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.PublicPacketPage": {
             "type": "object",
             "properties": {
-                "heardAt": {
+                "hasMore": {
+                    "type": "boolean"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.PublicPacketSummary"
+                    }
+                },
+                "nextCursor": {
                     "type": "integer"
                 },
-                "hopCount": {
-                    "type": "integer"
-                },
-                "iata": {
+                "nextPageCursor": {
                     "type": "string"
-                },
-                "id": {
-                    "type": "integer"
-                },
-                "packetHash": {
-                    "type": "string"
-                },
-                "payloadType": {
-                    "type": "integer"
-                },
-                "payloadTypeName": {
-                    "type": "string"
-                },
-                "rssi": {
-                    "type": "integer"
-                },
-                "snr": {
-                    "type": "number"
                 }
             }
         },
@@ -3369,21 +6184,6 @@ const docTemplate = `{
                 }
             }
         },
-        "github_com_MeshCore-Beacon_beacon-server_internal_api.RegionSummary": {
-            "type": "object",
-            "properties": {
-                "id": {
-                    "type": "integer"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "slug": {
-                    "description": "URL-safe identifier e.g. \"western-canada\"",
-                    "type": "string"
-                }
-            }
-        },
         "github_com_MeshCore-Beacon_beacon-server_internal_api.ResolvedHop": {
             "type": "object",
             "properties": {
@@ -3424,6 +6224,47 @@ const docTemplate = `{
                 }
             }
         },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.RouteEvidence": {
+            "type": "object",
+            "properties": {
+                "generatedAt": {
+                    "type": "integer"
+                },
+                "hasMore": {
+                    "type": "boolean"
+                },
+                "hashSize": {
+                    "type": "integer"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.RouteObservation"
+                    }
+                },
+                "matchAvailable": {
+                    "type": "boolean"
+                },
+                "matchType": {
+                    "type": "string"
+                },
+                "nextPageCursor": {
+                    "type": "string"
+                },
+                "pathBytes": {
+                    "type": "string"
+                },
+                "route": {
+                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.KnownRoute"
+                },
+                "windowEnd": {
+                    "type": "integer"
+                },
+                "windowStart": {
+                    "type": "integer"
+                }
+            }
+        },
         "github_com_MeshCore-Beacon_beacon-server_internal_api.RouteHop": {
             "type": "object",
             "properties": {
@@ -3441,6 +6282,38 @@ const docTemplate = `{
                 },
                 "nodeId": {
                     "type": "string"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.RouteObservation": {
+            "type": "object",
+            "properties": {
+                "heardAt": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "observerId": {
+                    "type": "string"
+                },
+                "observerName": {
+                    "type": "string"
+                },
+                "packetHash": {
+                    "type": "string"
+                },
+                "payloadType": {
+                    "type": "integer"
+                },
+                "payloadTypeName": {
+                    "type": "string"
+                },
+                "rssi": {
+                    "type": "integer"
+                },
+                "snr": {
+                    "type": "number"
                 }
             }
         },
@@ -3470,9 +6343,36 @@ const docTemplate = `{
                 }
             }
         },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.ScopeHour": {
+            "type": "object",
+            "properties": {
+                "hour": {
+                    "description": "epoch ms, start of the UTC hour",
+                    "type": "integer"
+                },
+                "nodes": {
+                    "description": "distinct nodes whose adverts were heard in the scope that hour",
+                    "type": "integer"
+                },
+                "observers": {
+                    "description": "distinct observers that heard the scope's packets that hour",
+                    "type": "integer"
+                },
+                "packets": {
+                    "type": "integer"
+                }
+            }
+        },
         "github_com_MeshCore-Beacon_beacon-server_internal_api.ScopeStats": {
             "type": "object",
             "properties": {
+                "hourly": {
+                    "description": "packetCount by hour, oldest first; hours with none omitted",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.ScopeHour"
+                    }
+                },
                 "name": {
                     "description": "normalized scope name e.g. \"#bc\"",
                     "type": "string"
@@ -3491,6 +6391,86 @@ const docTemplate = `{
                 }
             }
         },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.SignalBin": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "lower": {
+                    "type": "number"
+                },
+                "upper": {
+                    "type": "number"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.SignalHour": {
+            "type": "object",
+            "properties": {
+                "hour": {
+                    "type": "integer"
+                },
+                "receptions": {
+                    "type": "integer"
+                },
+                "rssiAverage": {
+                    "type": "number"
+                },
+                "rssiSamples": {
+                    "type": "integer"
+                },
+                "snrAverage": {
+                    "type": "number"
+                },
+                "snrSamples": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.SignalMetric": {
+            "type": "object",
+            "properties": {
+                "average": {
+                    "type": "number"
+                },
+                "histogram": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.SignalBin"
+                    }
+                },
+                "samples": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.SignalStats": {
+            "type": "object",
+            "properties": {
+                "hourly": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.SignalHour"
+                    }
+                },
+                "receptions": {
+                    "type": "integer"
+                },
+                "rssi": {
+                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.SignalMetric"
+                },
+                "since": {
+                    "type": "integer"
+                },
+                "snr": {
+                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.SignalMetric"
+                },
+                "until": {
+                    "type": "integer"
+                }
+            }
+        },
         "github_com_MeshCore-Beacon_beacon-server_internal_api.StatsOverview": {
             "type": "object",
             "properties": {
@@ -3500,14 +6480,126 @@ const docTemplate = `{
                 "activeObservers": {
                     "type": "integer"
                 },
+                "since": {
+                    "description": "epoch ms, start of the window",
+                    "type": "integer"
+                },
                 "totalObservations": {
                     "type": "integer"
                 },
                 "totalPackets": {
+                    "description": "distinct per hour (see StatsSeriesValues)",
+                    "type": "integer"
+                },
+                "until": {
+                    "description": "epoch ms, exclusive end of the window",
                     "type": "integer"
                 },
                 "windowHours": {
-                    "description": "always 24 for now",
+                    "description": "complete rolled hours the totals cover, at most 24",
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.StatsSeries": {
+            "type": "object",
+            "properties": {
+                "completeHours": {
+                    "description": "hours contributing to summary",
+                    "type": "integer"
+                },
+                "earliestComplete": {
+                    "description": "first complete hour held, epoch ms; null if none",
+                    "type": "integer"
+                },
+                "hours": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.StatsSeriesHour"
+                    }
+                },
+                "revision": {
+                    "description": "changes whenever rolled hours, their status or coverage change",
+                    "type": "integer"
+                },
+                "since": {
+                    "description": "effective start, epoch ms on a UTC hour",
+                    "type": "integer"
+                },
+                "summary": {
+                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.StatsSeriesValues"
+                },
+                "until": {
+                    "description": "effective exclusive end, epoch ms on a UTC hour",
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.StatsSeriesHour": {
+            "type": "object",
+            "properties": {
+                "hour": {
+                    "description": "epoch ms, start of the hour",
+                    "type": "integer"
+                },
+                "status": {
+                    "description": "partial: raw rows deleted before it was rolled",
+                    "type": "string",
+                    "enum": [
+                        "complete",
+                        "partial",
+                        "missing"
+                    ]
+                },
+                "values": {
+                    "description": "null unless complete",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.StatsSeriesValues"
+                        }
+                    ]
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.StatsSeriesValues": {
+            "type": "object",
+            "properties": {
+                "activeIatas": {
+                    "description": "distinct across the hour or window",
+                    "type": "integer"
+                },
+                "activeObservers": {
+                    "description": "distinct across the hour or window",
+                    "type": "integer"
+                },
+                "activeScopes": {
+                    "description": "distinct across the hour or window",
+                    "type": "integer"
+                },
+                "maxPathEntries": {
+                    "type": "integer"
+                },
+                "observations": {
+                    "type": "integer"
+                },
+                "rssiSamples": {
+                    "type": "integer"
+                },
+                "rssiSum": {
+                    "description": "average = rssiSum / rssiSamples",
+                    "type": "number"
+                },
+                "scopedPackets": {
+                    "type": "integer"
+                },
+                "snrSamples": {
+                    "type": "integer"
+                },
+                "snrSum": {
+                    "description": "average = snrSum / snrSamples",
+                    "type": "number"
+                },
+                "uniquePackets": {
                     "type": "integer"
                 }
             }
@@ -3533,6 +6625,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "nodeId": {
+                    "description": "null once the node row has been deleted",
                     "type": "string"
                 },
                 "nodeName": {
@@ -3542,6 +6635,10 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "nodeTypeName": {
+                    "type": "string"
+                },
+                "publicKey": {
+                    "description": "hex",
                     "type": "string"
                 }
             }
@@ -3557,6 +6654,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "nodeId": {
+                    "description": "null once the node row has been deleted",
                     "type": "string"
                 },
                 "nodeName": {
@@ -3570,6 +6668,10 @@ const docTemplate = `{
                 },
                 "observationCount": {
                     "type": "integer"
+                },
+                "publicKey": {
+                    "description": "hex",
+                    "type": "string"
                 }
             }
         },
@@ -3710,6 +6812,73 @@ const docTemplate = `{
                 }
             }
         },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.UpdateAdminCORSRequest": {
+            "type": "object",
+            "required": [
+                "allowed_origins"
+            ],
+            "properties": {
+                "allowed_origins": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.UpdateAdminConfigRequest": {
+            "type": "object",
+            "properties": {
+                "cors": {
+                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.UpdateAdminCORSRequest"
+                },
+                "guards": {
+                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.UpdateAdminGuardsRequest"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.UpdateAdminConfigResponse": {
+            "type": "object",
+            "properties": {
+                "config": {
+                    "$ref": "#/definitions/github_com_MeshCore-Beacon_beacon-server_internal_api.AdminConfig"
+                },
+                "persisted": {
+                    "type": "boolean"
+                },
+                "requires_restart": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.UpdateAdminGuardsRequest": {
+            "type": "object",
+            "required": [
+                "enforce"
+            ],
+            "properties": {
+                "enforce": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "github_com_MeshCore-Beacon_beacon-server_internal_api.WSTicket": {
+            "type": "object",
+            "properties": {
+                "expiresAt": {
+                    "description": "ExpiresAt is when the ticket stops opening /ws, in epoch ms.",
+                    "type": "integer",
+                    "example": 1793470167000
+                },
+                "ticket": {
+                    "type": "string",
+                    "example": "AAABmZ1s4CgLBvU1n1yN3v8hQm9YtVq2"
+                }
+            }
+        },
         "internal_api_handlers.APIError": {
             "type": "object",
             "properties": {
@@ -3733,6 +6902,14 @@ const docTemplate = `{
                     "type": "string"
                 }
             }
+        }
+    },
+    "securityDefinitions": {
+        "AdminKey": {
+            "description": "Enter Bearer followed by the configured operator key. Use HTTPS.",
+            "type": "apiKey",
+            "name": "Authorization",
+            "in": "header"
         }
     },
     "tags": [
@@ -3771,18 +6948,22 @@ const docTemplate = `{
         {
             "description": "Network statistics and time series",
             "name": "Stats"
+        },
+        {
+            "description": "Server info for the BEACON Mobile app",
+            "name": "Info"
         }
     ]
 }`
 
 // SwaggerInfo holds exported Swagger Info so clients can modify it
 var SwaggerInfo = &swag.Spec{
-	Version:          "1.6.0",
+	Version:          "2.2.0",
 	Host:             "localhost:8080",
 	BasePath:         "/api/v1",
 	Schemes:          []string{"http", "https"},
 	Title:            "MeshCore Beacon API",
-	Description:      "MeshCore network observation backend. Ingests LoRa packets from MQTT brokers, stores in PostgreSQL, and streams live events via WebSocket.",
+	Description:      "MeshCore network observation backend. Ingests LoRa packets from MQTT brokers, stores in PostgreSQL, and streams live events via WebSocket.\nREST requests share a configurable per-client rate limit (default 600/minute and a 600-request one-second burst cap). Exceeded limits return HTTP 429 with error.code=rate_limited and a Retry-After header in seconds. CORS preflights and WebSocket upgrades do not consume this API budget.\nWebSocket upgrade attempts at /ws have a configurable per-client limit (default 10/minute, including failed handshakes). Rate exhaustion returns HTTP 429 with Retry-After before upgrade. An accepted socket exceeding the concurrent cap closes with code 1013 before hello; established connections remain open.\nDatabase cost guards: a guarded family returns 429 (rate_limited, Retry-After 1) above 4 concurrent database requests per client, or 503 with Retry-After (deadline_exceeded, 5 s; service_unavailable, 2 s). Families observe by default and refuse nothing until an operator enforces them.",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
 	LeftDelim:        "{{",

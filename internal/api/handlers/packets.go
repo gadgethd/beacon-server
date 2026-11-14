@@ -4,7 +4,9 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/MeshCore-Beacon/beacon-server/internal/api"
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 )
 
 // PacketsRouter mounts all /packets routes onto a subrouter.
@@ -44,11 +47,14 @@ func PacketsRouter(reader api.Reader) http.Handler {
 //	@Param		region			query		string	false	"Filter by region slug, expands to member IATAs"
 //	@Param		since			query		int		false	"Filter by first_heard_at >= since (epoch ms)"
 //	@Param		until			query		int		false	"Filter by first_heard_at <= until (epoch ms)"
-//	@Param		cursor			query		int		false	"epoch ms of last item for pagination; last_heard_at, or site-local heard_at when iatas is set"
-//	@Param		limit			query		int		false	"Max results (default 20, max 100)"
-//	@Success	200				{object}	api.Page[api.PublicPacketSummary]
+//	@Param		cursor			query		int		false	"epoch ms of the last item: its last_heard_at, or its site-local heard_at when iatas, iata, region or regionId is set (with hashPrefix always last_heard_at). Prefer pageCursor where nextPageCursor is returned"
+//	@Param		pageCursor		query		string	false	"Opaque nextPageCursor from a previous response; keeps millisecond ties and wins over cursor when both are sent. A region page served without nextPageCursor pages by cursor: there cursor wins, and a pageCursor sent alone pages by its millisecond. Ignored with hashPrefix, which pages by cursor"
+//	@Param		limit			query		int		false	"Max results (default 50); must be positive, values above 200 are clamped" minimum(1) maximum(200)
+//	@Param		hashPrefix		query		string	false	"Match packets whose hash starts with this hex prefix (4-16 chars). Ordering and cursor use global last_heard_at even when iatas is set"
+//	@Success	200				{object}	api.PublicPacketPage
 //	@Failure	400				{object}	handlers.APIError
 //	@Failure	500				{object}	handlers.APIError
+//	@Failure	503				{object}	handlers.APIError	"Not available yet, or the server is busy: retry after Retry-After seconds"
 //	@Router		/packets [get]
 func listPackets(reader api.Reader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -93,7 +99,16 @@ func listPackets(reader api.Reader) http.HandlerFunc {
 			}
 			cursor = c
 		}
-		limit, err := parseLimit(r)
+		var pageCursor *api.PacketCursor
+		if raw := r.URL.Query().Get("pageCursor"); raw != "" {
+			pc, err := api.ParsePacketCursor(raw)
+			if err != nil {
+				respondError(w, http.StatusBadRequest, "invalid pageCursor")
+				return
+			}
+			pageCursor = pc
+		}
+		limit, err := parseLimit(r, 50)
 		if err != nil {
 			respondError(w, http.StatusBadRequest, err.Error())
 			return
@@ -102,15 +117,33 @@ func listPackets(reader api.Reader) http.HandlerFunc {
 		if regionIDStr := r.URL.Query().Get("regionId"); regionIDStr != "" || r.URL.Query().Get("region") != "" {
 			regionIATAs, err := resolveRegionIATAs(r.Context(), regionIDStr, r.URL.Query().Get("region"), reader)
 			if err != nil {
-				respondError(w, http.StatusBadRequest, err.Error())
+				respondRegionError(w, err)
 				return
 			}
 			iatas = append(iatas, regionIATAs...)
 		}
 		scopes := parseCSVOrSingle(r, "scopes", "scope")
-		packets, err := reader.ListPackets(r.Context(), payloadTypes, routeTypes, iatas, scopes, since, until, cursor, limit)
+		var packets api.PacketPage
+		if p := r.URL.Query().Get("hashPrefix"); p != "" {
+			lo, hi, err := hashPrefixRange(p)
+			if err != nil {
+				respondError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			page, err := reader.SearchPacketsByHashPrefix(r.Context(), lo, hi, payloadTypes, routeTypes, iatas, scopes, since, until, cursor, limit)
+			if err != nil {
+				// This err shadows the outer one, so answer here; a hash search reads no read model.
+				respondReaderError(w, err, "internal server error")
+				return
+			}
+			packets = api.PacketPage{Page: page}
+		} else {
+			packets, err = reader.ListPackets(r.Context(), payloadTypes, routeTypes, iatas, scopes, since, until, cursor, pageCursor, limit)
+		}
 		if err != nil {
-			respondError(w, http.StatusInternalServerError, "internal server error")
+			if !respondUnavailableFor(w, err, modelPacketSites) {
+				respondReaderError(w, err, "internal server error")
+			}
 			return
 		}
 		respond(w, http.StatusOK, api.ToPublicPacketPage(packets))
@@ -130,10 +163,11 @@ func listPackets(reader api.Reader) http.HandlerFunc {
 //	@Param		region				query		string	false	"Filter by region slug"
 //	@Param		regionId			query		int		false	"Filter by region ID"
 //	@Param		scope				query		string	false	"Filter by transport scope name"
-//	@Param		limit				query		int		false	"Max results (default 20, max 100)"
-//	@Success	200					{object}	[]api.PublicPacketSummary
+//	@Param		limit				query		int		false	"Max results (default 100); must be positive, values above 200 are clamped" minimum(1) maximum(200)
+//	@Success	200					{object}	[]api.PacketSummary
 //	@Failure	400					{object}	handlers.APIError
 //	@Failure	500					{object}	handlers.APIError
+//	@Failure	503					{object}	handlers.APIError	"The read took too long: retry after Retry-After seconds"
 //	@Router		/packets/backfill [get]
 func listPacketsBackfill(reader api.Reader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -147,7 +181,7 @@ func listPacketsBackfill(reader api.Reader) http.HandlerFunc {
 			respondError(w, http.StatusBadRequest, "afterObservationId must be an integer")
 			return
 		}
-		limit, err := parseLimit(r)
+		limit, err := parseLimit(r, 100)
 		if err != nil {
 			respondError(w, http.StatusBadRequest, err.Error())
 			return
@@ -172,7 +206,7 @@ func listPacketsBackfill(reader api.Reader) http.HandlerFunc {
 		if regionIDStr := r.URL.Query().Get("regionId"); regionIDStr != "" || r.URL.Query().Get("region") != "" {
 			regionIATAs, err := resolveRegionIATAs(r.Context(), r.URL.Query().Get("regionId"), r.URL.Query().Get("region"), reader)
 			if err != nil {
-				respondError(w, http.StatusBadRequest, err.Error())
+				respondRegionError(w, err)
 				return
 			}
 			iatas = append(iatas, regionIATAs...)
@@ -180,7 +214,7 @@ func listPacketsBackfill(reader api.Reader) http.HandlerFunc {
 		scope := r.URL.Query().Get("scope")
 		packets, err := reader.ListPacketsAfterID(r.Context(), afterID, payloadType, routeType, iatas, scope, limit)
 		if err != nil {
-			respondError(w, http.StatusInternalServerError, "internal server error")
+			respondReaderError(w, err, "internal server error")
 			return
 		}
 		respond(w, http.StatusOK, api.ToPublicPacketSummaries(packets))
@@ -197,6 +231,7 @@ func listPacketsBackfill(reader api.Reader) http.HandlerFunc {
 //	@Failure	400			{object}	handlers.APIError
 //	@Failure	404			{object}	handlers.APIError
 //	@Failure	500			{object}	handlers.APIError
+//	@Failure	503			{object}	handlers.APIError	"The read took too long: retry after Retry-After seconds"
 //	@Router		/packets/{packetHash} [get]
 func getPacket(reader api.Reader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -207,10 +242,41 @@ func getPacket(reader api.Reader) http.HandlerFunc {
 			return
 		}
 		packet, err := reader.GetPacket(r.Context(), hash)
-		if err != nil {
+		switch {
+		case errors.Is(err, pgx.ErrNoRows), err == nil && packet == nil:
 			respondError(w, http.StatusNotFound, "packet not found")
+			return
+		case err != nil:
+			respondReaderError(w, err, "internal server error")
 			return
 		}
 		respond(w, http.StatusOK, api.ToPublicPacket(packet))
 	}
+}
+
+// hashPrefixRange turns a hex prefix into the byte range [lo, hi) of hashes that start
+// with it. An odd length pins the high nibble only; hi is nil when the prefix is all f.
+func hashPrefixRange(prefix string) (lo, hi []byte, err error) {
+	if len(prefix) < 4 || len(prefix) > 16 {
+		return nil, nil, errors.New("hashPrefix must be 4-16 hex characters")
+	}
+	step := 1
+	if len(prefix)%2 == 1 {
+		prefix += "0"
+		step = 0x10
+	}
+	lo, err = hex.DecodeString(prefix)
+	if err != nil {
+		return nil, nil, errors.New("hashPrefix must be hex")
+	}
+	hi = bytes.Clone(lo)
+	for i := len(hi) - 1; i >= 0; i-- {
+		v := int(hi[i]) + step
+		hi[i] = byte(v)
+		if v <= 0xff {
+			return lo, hi, nil
+		}
+		step = 1
+	}
+	return lo, nil, nil
 }

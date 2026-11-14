@@ -27,13 +27,82 @@ type NodeNeighbor struct {
 	SNR              *float32  `json:"snr,omitempty"`
 }
 
+// NodeActivityPoint is one hour of hearings of a node's packets; an average is null without samples.
+type NodeActivityPoint struct {
+	T            int64    `json:"t"` // hour start, epoch ms
+	Observations int64    `json:"observations"`
+	SNRAvg       *float64 `json:"snrAvg"`
+	RSSIAvg      *float64 `json:"rssiAvg"`
+	HopAvg       *float64 `json:"hopAvg"`
+}
+
+// NodeActivitySummary covers the whole window: each average is its sum over its samples.
+type NodeActivitySummary struct {
+	Observations int64    `json:"observations"`
+	SNRAvg       *float64 `json:"snrAvg"`
+	RSSIAvg      *float64 `json:"rssiAvg"`
+	HopAvg       *float64 `json:"hopAvg"`
+}
+
+// NodeActivityLatest is the node's most recently heard packet.
+type NodeActivityLatest struct {
+	PacketHash string `json:"packetHash"` // hex
+	HeardAt    int64  `json:"heardAt"`    // epoch ms
+}
+
+// NodeActivity is the hourly heard-activity of the packets a node originated.
+type NodeActivity struct {
+	WindowStart int64 `json:"windowStart"` // inclusive, epoch ms, on the hour
+	WindowEnd   int64 `json:"windowEnd"`   // exclusive, epoch ms; the last hour is still filling
+	GeneratedAt int64 `json:"generatedAt"`
+	// Hours before rolledUntil come from rollups and from rawFrom on from raw rows; when rawFrom is later, the
+	// hours between are uncovered, not quiet.
+	RolledUntil *int64 `json:"rolledUntil,omitempty"` // end of the newest complete rollup hour, epoch ms
+	RawFrom     *int64 `json:"rawFrom,omitempty"`     // start of the raw tail, epoch ms
+
+	Range   string              `json:"range"`
+	Summary NodeActivitySummary `json:"summary"`
+	Points  []NodeActivityPoint `json:"points"` // ascending, only hours with observations
+	Latest  *NodeActivityLatest `json:"latest"`
+}
+
 // NodeIATA represents a single IATA code and the last time the node was heard there.
 type NodeIATA struct {
 	IATA      string `json:"iata"`
 	LastHeard int64  `json:"lastHeard"` // epoch ms
 }
 
-// NodeSummary is the internal node read model used in list responses.
+// NodePage adds the exact cursor while keeping the numeric one for older clients.
+type NodePage struct {
+	Page[NodeSummary]
+	NextPageCursor *string `json:"nextPageCursor,omitempty"`
+	// Sort and Order name the order the items are in ("lastSeen" "desc" unless a sort was asked
+	// for), so a client can tell this server sorted; older servers leave them out.
+	Sort  string `json:"sort,omitempty" enums:"lastSeen,name,type,neighbors"`
+	Order string `json:"order,omitempty" enums:"asc,desc"`
+}
+
+// Node list orders besides the default, last seen newest first.
+const (
+	NodeSortName      = "name"
+	NodeSortType      = "type"
+	NodeSortNeighbors = "neighbors"
+	// NodeSortLastSeen reaches the sorted list only oldest first; newest first is the default list.
+	NodeSortLastSeen = "lastSeen"
+)
+
+// NodeSort orders a node list by name, type, neighbour count or last seen.
+type NodeSort struct {
+	By         string
+	Descending bool
+}
+
+// ValidNodeSort reports whether by is a NodeSort order.
+func ValidNodeSort(by string) bool {
+	return by == NodeSortName || by == NodeSortType || by == NodeSortNeighbors || by == NodeSortLastSeen
+}
+
+// NodeSummary is the minimal node representation used in list responses.
 type NodeSummary struct {
 	ID                 uuid.UUID   `json:"id"`
 	PublicKey          string      `json:"publicKey"` // hex-encoded Ed25519 public key
@@ -49,11 +118,15 @@ type NodeSummary struct {
 	DefaultScope       *string     `json:"defaultScope,omitempty"` // most recently matched transport scope name e.g. "#bc"
 	KnownNeighborCount int64       `json:"knownNeighborCount"`
 	NeighborIDs        []uuid.UUID `json:"neighborIds,omitempty"` // only populated when the list request opts in; see ?neighbors=true
+	LastSeen           int64       `json:"lastSeen"`              // epoch ms
 	// Stale is true when the node hasn't been seen (last_seen) within the configured
 	// staleness window (default 24h; internal/config.ResolvedConfig.NodeStaleThreshold).
 	// Applies to every node type, unlike ClockDriftSeconds/ClockOutOfSync on Node, which
 	// are repeater/room-server only.
 	Stale bool `json:"stale"`
+	// PossiblyForeign compares a repeater's stored position with this server's
+	// configured IATA border union. Omitted when disabled, unknown, or not repeater.
+	PossiblyForeign *bool `json:"possiblyForeign,omitempty"`
 }
 
 // Node is the internal full node read model. It may contain database metadata;
@@ -66,7 +139,6 @@ type Node struct {
 	SupportsMultibyteTraces bool           `json:"supportsMultibyteTraces"`      // firmware >= 1.11.0; detected via trace hash size
 	MinFirmwareVersion      *string        `json:"minFirmwareVersion,omitempty"` // derived from capability flags
 	FirstSeen               int64          `json:"firstSeen"`                    // epoch ms
-	LastSeen                int64          `json:"lastSeen"`                     // epoch ms
 	Metadata                any            `json:"metadata,omitempty"`           // raw JSONB metadata
 	Neighbors               []NodeNeighbor `json:"neighbors"`
 	// Clock drift, repeaters/room servers only (nodeType 2/3); omitted entirely for other
@@ -78,6 +150,51 @@ type Node struct {
 	ClockDriftSeconds *int   `json:"clockDriftSeconds,omitempty"`
 	ClockOutOfSync    *bool  `json:"clockOutOfSync,omitempty"`
 	ClockCheckedAt    *int64 `json:"clockCheckedAt,omitempty"`
+	// MeshMapper is what MeshMapper's repeater list says about this key; omitted when
+	// the import is off or MeshMapper doesn't list it.
+	MeshMapper *MeshMapperRepeater `json:"meshmapper,omitempty"`
+}
+
+// MeshMapperRepeater is imported from MeshMapper's get_repeaters.php. Times are epoch ms.
+// Text fields are admin-entered free text: escape before rendering.
+type MeshMapperRepeater struct {
+	IATA            string                  `json:"iata,omitempty"` // region of its latest advert, per MeshMapper
+	FetchedAt       int64                   `json:"fetchedAt"`      // when Beacon last fetched this list
+	Site            MeshMapperSite          `json:"site"`
+	Carpeater       bool                    `json:"carpeater"` // mobile repeater: its position moves
+	Admins          []string                `json:"admins"`
+	Scopes          []MeshMapperScope       `json:"scopes"`
+	ScopesCheckedAt *int64                  `json:"scopesCheckedAt,omitempty"` // set (with empty scopes) when it answered with none
+	DefaultScope    *MeshMapperDefaultScope `json:"defaultScope,omitempty"`
+}
+
+// MeshMapperSite holds admin-entered site details; each field is omitted when unset.
+type MeshMapperSite struct {
+	Power       *string  `json:"power,omitempty"`
+	Hardware    *string  `json:"hardware,omitempty"`
+	Antenna     *string  `json:"antenna,omitempty"`
+	HeightM     *float64 `json:"heightM,omitempty"`     // antenna above ground
+	HeightASLM  *float64 `json:"heightAslM,omitempty"`  // antenna above mean sea level
+	PowerSource *string  `json:"powerSource,omitempty"` // mains, solar, battery or poe
+	Notes       *string  `json:"notes,omitempty"`
+}
+
+// MeshMapperScope is one scope the repeater was confirmed carrying, and how.
+type MeshMapperScope struct {
+	Scope           string  `json:"scope"`
+	ObservedAt      *int64  `json:"observedAt,omitempty"` // seen forwarding scoped traffic
+	ObservedPackets *int64  `json:"observedPackets,omitempty"`
+	Proof           *string `json:"proof,omitempty"`      // multibyte or floor
+	ReportedAt      *int64  `json:"reportedAt,omitempty"` // an observer asked it
+	UploadedAt      *int64  `json:"uploadedAt,omitempty"` // a wardriver's app asked it
+}
+
+// MeshMapperDefaultScope is the scope the repeater puts on its own adverts.
+type MeshMapperDefaultScope struct {
+	Name      *string `json:"name,omitempty"`
+	State     string  `json:"state"` // named, unknown (set but not nameable yet) or none
+	UpdatedAt *int64  `json:"updatedAt,omitempty"`
+	Source    *string `json:"source,omitempty"` // advert or reported
 }
 
 // PublicNodeIATA is the public representation of a node's IATA history.
@@ -106,6 +223,8 @@ type PublicNodeNeighbor struct {
 // PublicNodeSummary is the allowlisted node representation returned by public
 // list endpoints.
 type PublicNodeSummary struct {
+	LastSeen           int64            `json:"lastSeen"`
+	PossiblyForeign    *bool            `json:"possiblyForeign,omitempty"`
 	ID                 uuid.UUID        `json:"id"`
 	PublicKey          string           `json:"publicKey"`
 	NodeType           int16            `json:"nodeType"`
@@ -127,6 +246,7 @@ type PublicNodeSummary struct {
 // absent: Node.Metadata is an internal/raw JSONB field and must not cross the
 // public API boundary.
 type PublicNode struct {
+	MeshMapper *MeshMapperRepeater `json:"meshmapper,omitempty"`
 	PublicNodeSummary
 	LocationSource          *string              `json:"locationSource,omitempty"`
 	LastAdvertAt            *int64               `json:"lastAdvertAt,omitempty"`
@@ -170,6 +290,8 @@ func ToPublicNodeNeighbor(neighbor NodeNeighbor) PublicNodeNeighbor {
 // ToPublicNodeSummary maps an internal node summary to its public DTO.
 func ToPublicNodeSummary(node NodeSummary) PublicNodeSummary {
 	public := PublicNodeSummary{
+		PossiblyForeign:    node.PossiblyForeign,
+		LastSeen:           node.LastSeen,
 		ID:                 node.ID,
 		PublicKey:          node.PublicKey,
 		NodeType:           node.NodeType,
@@ -197,11 +319,15 @@ func ToPublicNodeSummary(node NodeSummary) PublicNodeSummary {
 }
 
 // ToPublicNodePage maps a node list page to an allowlisted public page.
-func ToPublicNodePage(page Page[NodeSummary]) Page[PublicNodeSummary] {
-	public := Page[PublicNodeSummary]{
-		NextCursor: page.NextCursor,
-		HasMore:    page.HasMore,
-	}
+type PublicNodePage struct {
+	Page[PublicNodeSummary]
+	NextPageCursor *string `json:"nextPageCursor,omitempty"`
+	Sort           string  `json:"sort,omitempty"`
+	Order          string  `json:"order,omitempty"`
+}
+
+func ToPublicNodePage(page NodePage) PublicNodePage {
+	public := PublicNodePage{Page: Page[PublicNodeSummary]{NextCursor: page.NextCursor, HasMore: page.HasMore}, NextPageCursor: page.NextPageCursor, Sort: page.Sort, Order: page.Order}
 	if page.Items != nil {
 		public.Items = make([]PublicNodeSummary, len(page.Items))
 		for i, node := range page.Items {
@@ -217,6 +343,7 @@ func ToPublicNode(node *Node) *PublicNode {
 		return nil
 	}
 	public := &PublicNode{
+		MeshMapper:              node.MeshMapper,
 		PublicNodeSummary:       ToPublicNodeSummary(node.NodeSummary),
 		LocationSource:          node.LocationSource,
 		LastAdvertAt:            node.LastAdvertAt,

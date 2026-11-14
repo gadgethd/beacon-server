@@ -5,13 +5,16 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/MeshCore-Beacon/beacon-server/internal/api"
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 )
 
 // RegionsRouter mounts all /regions routes onto a subrouter.
@@ -30,18 +33,23 @@ func RegionsRouter(reader api.Reader) http.Handler {
 
 // listRegions godoc
 //
-//	@Summary	List all regions
-//	@Tags		Regions
-//	@Produce	json
-//	@Success	200	{array}		api.RegionSummary
-//	@Failure	404	{object}	handlers.APIError
-//	@Router		/regions [get]
+//	@Summary		List all regions
+//	@Description	Each region carries its detail and member IATAs, the same as GET /regions/{regionId}.
+//	@Tags			Regions
+//	@Produce		json
+//	@Success		200	{array}		api.Region
+//	@Failure		500	{object}	handlers.APIError
+//	@Failure		503	{object}	handlers.APIError	"The read took too long: retry after Retry-After seconds"
+//	@Router			/regions [get]
 func listRegions(reader api.Reader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		regions, err := reader.ListRegions(r.Context())
 		if err != nil {
-			respondError(w, http.StatusNotFound, "no regions found")
+			respondReaderError(w, err, "internal server error")
 			return
+		}
+		if regions == nil {
+			regions = []api.Region{}
 		}
 		respond(w, http.StatusOK, regions)
 	}
@@ -56,6 +64,8 @@ func listRegions(reader api.Reader) http.HandlerFunc {
 //	@Success	200			{object}	api.Region
 //	@Failure	400			{object}	handlers.APIError
 //	@Failure	404			{object}	handlers.APIError
+//	@Failure	500			{object}	handlers.APIError
+//	@Failure	503			{object}	handlers.APIError	"The read took too long: retry after Retry-After seconds"
 //	@Router		/regions/{regionId} [get]
 func getRegion(reader api.Reader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -66,12 +76,37 @@ func getRegion(reader api.Reader) http.HandlerFunc {
 			return
 		}
 		region, err := reader.GetRegion(r.Context(), int32(regionInt))
-		if err != nil {
+		switch {
+		case errors.Is(err, pgx.ErrNoRows), err == nil && region == nil:
 			respondError(w, http.StatusNotFound, "region not found")
+			return
+		case err != nil:
+			respondReaderError(w, err, "internal server error")
 			return
 		}
 		respond(w, http.StatusOK, region)
 	}
+}
+
+// distributionWindow caps /stats/signal and /stats/paths, which sum every rolled hour per request.
+const distributionWindow = 30 * 24 * time.Hour
+
+// parseStatsWindow rounds both endpoints down to UTC hours. Polls within an
+// hour share a cache key; the response reports the effective window. A valid
+// sub-hour request can contain no complete buckets and return an empty result.
+func parseStatsWindow(r *http.Request, maxWindow time.Duration) (time.Time, time.Time, error) {
+	q := r.URL.Query()
+	for _, key := range []string{"since", "until"} {
+		if len(q[key]) != 1 || q.Get(key) == "" {
+			return time.Time{}, time.Time{}, fmt.Errorf("%s must be supplied exactly once", key)
+		}
+	}
+	since, errSince := strconv.ParseInt(q.Get("since"), 10, 64)
+	until, errUntil := strconv.ParseInt(q.Get("until"), 10, 64)
+	if errSince != nil || errUntil != nil || since < 0 || until <= since || until > 253402300799999 || until-since > maxWindow.Milliseconds() {
+		return time.Time{}, time.Time{}, fmt.Errorf("since and until must be epoch milliseconds between 0 and 253402300799999, with a positive window of at most %d days", int(maxWindow/(24*time.Hour)))
+	}
+	return time.UnixMilli(since).UTC().Truncate(time.Hour), time.UnixMilli(until).UTC().Truncate(time.Hour), nil
 }
 
 // parseIATAs splits a comma-separated iatas query param and uppercases each value.
@@ -168,4 +203,14 @@ func resolveRegionIATAs(ctx context.Context, regionID, regionSlug string, reader
 		return nil, fmt.Errorf("region not found: %w", err)
 	}
 	return region.IATAs, nil
+}
+
+// respondRegionError reports an unknown or malformed region filter as 400 and a
+// failed lookup through respondReaderError.
+func respondRegionError(w http.ResponseWriter, err error) {
+	if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, strconv.ErrSyntax) || errors.Is(err, strconv.ErrRange) {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	respondReaderError(w, err, "internal server error")
 }

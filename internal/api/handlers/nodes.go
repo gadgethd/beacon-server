@@ -5,13 +5,16 @@ package handlers
 
 import (
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/MeshCore-Beacon/beacon-server/internal/api"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // NodesRouter mounts all /nodes routes onto a subrouter.
@@ -19,12 +22,14 @@ import (
 // GET  /nodes                       → listNodes
 // GET  /nodes/{nodeId}              → getNode
 // GET  /nodes/{nodeId}/observations → listNodeObservations
+// GET  /nodes/{nodeId}/activity     → getNodeActivity
 func NodesRouter(reader api.Reader) http.Handler {
 	r := chi.NewRouter()
 	r.Get("/", listNodes(reader))
 	r.Route("/{nodeId}", func(r chi.Router) {
 		r.Get("/", getNode(reader))
 		r.Get("/observations", listNodeObservations(reader))
+		r.Get("/activity", getNodeActivity(reader))
 		r.Get("/neighbors", listNodeNeighbors(reader))
 	})
 	return r
@@ -49,10 +54,14 @@ func NodesRouter(reader api.Reader) http.Handler {
 //	@Param		supportsMultibyteTraces	query		bool	false	"Filter by multibyte trace support (true/false); omit for no filter"
 //	@Param		neighbors				query		bool	false	"Include each node's known neighbor IDs (neighborIds field). Bare ?neighbors or ?neighbors=true enables it; omit/false for none"
 //	@Param		cursor					query		int		false	"last_seen epoch ms of last item for pagination"
-//	@Param		limit					query		int		false	"Max results (default 20, max 100)"
-//	@Success	200						{object}	api.Page[api.PublicNodeSummary]
+//	@Param		pageCursor				query		string	false	"Opaque nextPageCursor from a previous response; keeps millisecond ties. Wins over cursor when both are sent"
+//	@Param		sort					query		string	false	"Order: lastSeen (default), name, type or neighbors. Unnamed nodes come last in either name order; other ties go newest first, lastSeen ties by id. Page any order but lastSeen desc with pageCursor only"	Enums(lastSeen, name, type, neighbors)
+//	@Param		order					query		string	false	"asc or desc. Defaults to asc, but to desc (newest first) for lastSeen; lastSeen asc lists the oldest heard first"	Enums(asc, desc)
+//	@Param		limit					query		int		false	"Max results (default 50); must be positive, values above 2000 are clamped" minimum(1) maximum(2000)
+//	@Success	200						{object}	api.PublicNodePage
 //	@Failure	400						{object}	handlers.APIError
 //	@Failure	500						{object}	handlers.APIError
+//	@Failure	503						{object}	handlers.APIError	"The read took too long: retry after Retry-After seconds"
 //	@Router		/nodes [get]
 func listNodes(reader api.Reader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -67,7 +76,7 @@ func listNodes(reader api.Reader) http.HandlerFunc {
 		} else if typeName := r.URL.Query().Get("typeName"); typeName != "" {
 			nodeType = api.NodeTypeFromString(typeName)
 		}
-		limit, err := parseLimit(r)
+		limit, err := parseLimitUpTo(r, 50, maxNodeListLimit)
 		if err != nil {
 			respondError(w, http.StatusBadRequest, err.Error())
 			return
@@ -80,6 +89,32 @@ func listNodes(reader api.Reader) http.HandlerFunc {
 				return
 			}
 			cursor = c
+		}
+		sort, sorted, err := parseNodeSort(r)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		var pageCursor *api.NodeCursor
+		var sortCursor *api.NodeSortCursor
+		if raw := r.URL.Query().Get("pageCursor"); raw != "" && sorted {
+			sc, err := api.ParseNodeSortCursor(raw)
+			if err != nil || sc.Sort != sort {
+				respondError(w, http.StatusBadRequest, "invalid pageCursor for this sort")
+				return
+			}
+			sortCursor = sc
+		} else if raw != "" {
+			pc, err := api.ParseNodeCursor(raw)
+			if err != nil {
+				respondError(w, http.StatusBadRequest, "invalid pageCursor")
+				return
+			}
+			pageCursor = pc
+		}
+		if sorted && cursor != 0 {
+			respondError(w, http.StatusBadRequest, "cursor works only with the default newest-first order; page with pageCursor")
+			return
 		}
 		var pubkey []byte
 		if pubkeyParam := strings.ToLower(r.URL.Query().Get("pubkey")); pubkeyParam != "" {
@@ -99,7 +134,7 @@ func listNodes(reader api.Reader) http.HandlerFunc {
 		if regionIDStr := r.URL.Query().Get("regionId"); regionIDStr != "" || r.URL.Query().Get("region") != "" {
 			regionIATAs, err := resolveRegionIATAs(r.Context(), regionIDStr, r.URL.Query().Get("region"), reader)
 			if err != nil {
-				respondError(w, http.StatusBadRequest, err.Error())
+				respondRegionError(w, err)
 				return
 			}
 			iatas = append(iatas, regionIATAs...)
@@ -138,12 +173,42 @@ func listNodes(reader api.Reader) http.HandlerFunc {
 				includeNeighbors = b
 			}
 		}
-		nodes, err := reader.ListNodes(r.Context(), nodeType, iatas, supportsMultibytePaths, supportsMultibyteTraces, pubkey, pubkeyPrefix, name, scope, cursor, limit, includeNeighbors)
+		var nodes api.NodePage
+		if sorted {
+			nodes, err = reader.ListNodesSorted(r.Context(), nodeType, iatas, supportsMultibytePaths, supportsMultibyteTraces, pubkey, pubkeyPrefix, name, scope, sort, sortCursor, limit, includeNeighbors)
+			nodes.Sort, nodes.Order = sort.By, "asc"
+			if sort.Descending {
+				nodes.Order = "desc"
+			}
+		} else {
+			nodes, err = reader.ListNodes(r.Context(), nodeType, iatas, supportsMultibytePaths, supportsMultibyteTraces, pubkey, pubkeyPrefix, name, scope, cursor, pageCursor, limit, includeNeighbors)
+			nodes.Sort, nodes.Order = "lastSeen", "desc"
+		}
 		if err != nil {
-			respondError(w, http.StatusInternalServerError, "internal server error")
+			respondReaderError(w, err, "internal server error")
 			return
 		}
 		respond(w, http.StatusOK, api.ToPublicNodePage(nodes))
+	}
+}
+
+// parseNodeSort reads sort and order; sorted is false for the default order, last seen newest first.
+func parseNodeSort(r *http.Request) (sort api.NodeSort, sorted bool, err error) {
+	by, order := r.URL.Query().Get("sort"), r.URL.Query().Get("order")
+	if order != "" && order != "asc" && order != "desc" {
+		return sort, false, errors.New("order must be asc or desc")
+	}
+	switch {
+	case by == "" || by == api.NodeSortLastSeen:
+		// Newest first stays on the legacy path so the numeric cursor keeps working.
+		if order == "asc" {
+			return api.NodeSort{By: api.NodeSortLastSeen}, true, nil
+		}
+		return sort, false, nil
+	case api.ValidNodeSort(by):
+		return api.NodeSort{By: by, Descending: order == "desc"}, true, nil
+	default:
+		return sort, false, errors.New("sort must be lastSeen, name, type or neighbors")
 	}
 }
 
@@ -156,6 +221,8 @@ func listNodes(reader api.Reader) http.HandlerFunc {
 //	@Success	200		{object}	api.PublicNode
 //	@Failure	400		{object}	handlers.APIError
 //	@Failure	404		{object}	handlers.APIError
+//	@Failure	500		{object}	handlers.APIError
+//	@Failure	503		{object}	handlers.APIError	"The read took too long: retry after Retry-After seconds"
 //	@Router		/nodes/{nodeId} [get]
 func getNode(reader api.Reader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -165,8 +232,12 @@ func getNode(reader api.Reader) http.HandlerFunc {
 			return
 		}
 		node, err := reader.GetNode(r.Context(), nodeID)
-		if err != nil {
+		switch {
+		case errors.Is(err, pgx.ErrNoRows), err == nil && node == nil:
 			respondError(w, http.StatusNotFound, "node not found")
+			return
+		case err != nil:
+			respondReaderError(w, err, "internal server error")
 			return
 		}
 		respond(w, http.StatusOK, api.ToPublicNode(node))
@@ -175,16 +246,18 @@ func getNode(reader api.Reader) http.HandlerFunc {
 
 // listNodeObservations godoc
 //
-//	@Summary	List packet observations originating from a node
-//	@Tags		Nodes
-//	@Produce	json
-//	@Param		nodeId	path		string	true	"Node UUID"
-//	@Param		cursor	query		int		false	"Observation ID of last item for pagination"
-//	@Param		limit	query		int		false	"Max results (default 20, max 100)"
-//	@Success	200		{object}	api.Page[api.PublicPacketObservationSummary]
-//	@Failure	400		{object}	handlers.APIError
-//	@Failure	500		{object}	handlers.APIError
-//	@Router		/nodes/{nodeId}/observations [get]
+//	@Summary		List packet observations originating from a node
+//	@Description	Newest packet first (by first hearing), then that packet's newest observation; observation ids do not descend across packets.
+//	@Tags			Nodes
+//	@Produce		json
+//	@Param			nodeId	path		string	true	"Node UUID"
+//	@Param			cursor	query		int		false	"nextCursor of the previous page (its last observation ID). A cursor whose observation has been deleted returns an empty last page"
+//	@Param			limit	query		int		false	"Max results (default 50); must be positive, values above 200 are clamped" minimum(1) maximum(200)
+//	@Success		200		{object}	api.Page[api.PacketObservationSummary]
+//	@Failure		400		{object}	handlers.APIError
+//	@Failure		500		{object}	handlers.APIError
+//	@Failure		503		{object}	handlers.APIError	"The read took too long: retry after Retry-After seconds"
+//	@Router			/nodes/{nodeId}/observations [get]
 func listNodeObservations(reader api.Reader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		nodeID, err := uuid.Parse(chi.URLParam(r, "nodeId"))
@@ -201,17 +274,60 @@ func listNodeObservations(reader api.Reader) http.HandlerFunc {
 			}
 			cursor = c
 		}
-		limit, err := parseLimit(r)
+		limit, err := parseLimit(r, 50)
 		if err != nil {
 			respondError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		observations, err := reader.ListNodeObservations(r.Context(), nodeID, cursor, limit)
 		if err != nil {
-			respondError(w, http.StatusInternalServerError, "internal server error")
+			respondReaderError(w, err, "internal server error")
 			return
 		}
 		respond(w, http.StatusOK, api.ToPublicPacketObservationPage(observations))
+	}
+}
+
+// getNodeActivity godoc
+//
+//	@Summary	Get hourly heard-activity for the packets a node originated
+//	@Tags		Nodes
+//	@Produce	json
+//	@Param		nodeId	path		string	true	"Node UUID"
+//	@Param		range	query		string	false	"Trailing window as a Go duration, max 720h (default 24h)"
+//	@Success	200		{object}	api.NodeActivity
+//	@Failure	400		{object}	handlers.APIError
+//	@Failure	404		{object}	handlers.APIError
+//	@Failure	500		{object}	handlers.APIError
+//	@Failure	503		{object}	handlers.APIError	"The read took too long: retry after Retry-After seconds"
+//	@Router		/nodes/{nodeId}/activity [get]
+func getNodeActivity(reader api.Reader) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		nodeID, err := uuid.Parse(chi.URLParam(r, "nodeId"))
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "invalid node ID")
+			return
+		}
+		rangeParam := r.URL.Query().Get("range")
+		if rangeParam == "" {
+			rangeParam = "24h"
+		}
+		window, err := time.ParseDuration(rangeParam)
+		if err != nil || window <= 0 || window > 720*time.Hour {
+			respondError(w, http.StatusBadRequest, "invalid range, use a duration up to 720h e.g. 24h, 168h, 720h")
+			return
+		}
+		activity, err := reader.GetNodeActivity(r.Context(), nodeID, window)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows), err == nil && activity == nil:
+			respondError(w, http.StatusNotFound, "node not found")
+			return
+		case err != nil:
+			respondReaderError(w, err, "internal server error")
+			return
+		}
+		activity.Range = rangeParam
+		respond(w, http.StatusOK, activity)
 	}
 }
 
@@ -224,6 +340,7 @@ func listNodeObservations(reader api.Reader) http.HandlerFunc {
 //	@Success	200		{object}	[]api.PublicNodeNeighbor
 //	@Failure	400		{object}	handlers.APIError
 //	@Failure	500		{object}	handlers.APIError
+//	@Failure	503		{object}	handlers.APIError	"The read took too long: retry after Retry-After seconds"
 //	@Router		/nodes/{nodeId}/neighbors [get]
 func listNodeNeighbors(reader api.Reader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -234,7 +351,7 @@ func listNodeNeighbors(reader api.Reader) http.HandlerFunc {
 		}
 		neighbors, err := reader.GetNodeNeighbors(r.Context(), nodeID)
 		if err != nil {
-			respondError(w, http.StatusInternalServerError, "internal server error")
+			respondReaderError(w, err, "internal server error")
 			return
 		}
 		respond(w, http.StatusOK, api.ToPublicNodeNeighbors(neighbors))

@@ -50,9 +50,7 @@ func TestToPublicNodeOmitsMetadata(t *testing.T) {
 func TestToPublicObserverOmitsStatusMetadata(t *testing.T) {
 	observer := &Observer{
 		ObserverSummary: ObserverSummary{ID: uuid.New(), Status: "online"},
-		StatusMetadata: map[string]any{
-			"internalSecret": "must not be serialized",
-		},
+		StatusMetadata:  json.RawMessage(`{"internalSecret":"must not be serialized"}`),
 	}
 
 	object := jsonObject(t, ToPublicObserver(observer))

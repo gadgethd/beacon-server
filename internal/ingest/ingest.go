@@ -37,18 +37,22 @@ package ingest
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/google/uuid"
 
 	"github.com/MeshCore-Beacon/beacon-server/internal/api"
+	"github.com/MeshCore-Beacon/beacon-server/internal/borders"
 	"github.com/MeshCore-Beacon/beacon-server/internal/hub"
 	"github.com/MeshCore-Beacon/beacon-server/internal/keystore"
 	"github.com/MeshCore-Beacon/beacon-server/internal/scopestore"
@@ -56,6 +60,8 @@ import (
 
 // Config holds the connection parameters for one broker.
 type Config struct {
+	// LocalBorders is the same live classifier used by node API reads.
+	LocalBorders *borders.Live
 	// BrokerName is a short human-readable label ("mqtt1", "mqtt2") used in
 	// log messages and stored in packet_observations.source_broker.
 	BrokerName string
@@ -87,10 +93,10 @@ type Config struct {
 type DB interface {
 	// UpsertObserver upserts the observers row keyed on pubkey, and returns
 	// the Observer ID, Display Name and an error if any.
-	UpsertObserver(ctx context.Context, pubkey []byte) (uuid.UUID, string, error)
+	UpsertObserver(ctx context.Context, pubkey []byte, iata string) (uuid.UUID, string, error)
 
 	// UpsertObserverBroker records that this observer was seen on brokerName.
-	UpsertObserverBroker(ctx context.Context, observerID uuid.UUID, brokerName string) error
+	UpsertObserverBroker(ctx context.Context, observerID uuid.UUID, brokerName string, isPacket bool) error
 
 	// UpsertIATA auto-creates an iata_codes row if it doesn't exist yet.
 	UpsertIATA(ctx context.Context, iata string) error
@@ -101,9 +107,9 @@ type DB interface {
 	// SetPacketDecrypted marks a packet as decrypted in the DB
 	SetPacketDecrypted(ctx context.Context, hash []byte) error
 
-	// InsertObservation inserts a packet_observations row.
-	// Returns (inserted, error); inserted=false means ON CONFLICT DO NOTHING fired.
-	InsertObservation(ctx context.Context, o InsertObservationParams) (bool, error)
+	// InsertObservation inserts a packet_observations row and returns the packet's
+	// observation count; inserted=false means ON CONFLICT DO NOTHING fired.
+	InsertObservation(ctx context.Context, o InsertObservationParams) (inserted bool, observationCount int64, err error)
 
 	// SetNodeCapability flips supports_multibyte_paths or supports_multibyte_traces
 	// for a node, never downgrading an existing TRUE.
@@ -137,14 +143,18 @@ type DB interface {
 	// UpsertNodeShortID upserts a node_short_ids row for path resolution.
 	UpsertNodeShortID(ctx context.Context, nodeID uuid.UUID, iata string, prefix4 []byte) error
 
-	// InsertChannelMessage stores a decrypted group text message. Returns insert success and an error.
-	InsertChannelMessage(ctx context.Context, m InsertChannelMessageParams) (bool, error)
+	// InsertChannelMessage stores a decrypted group text message. Returns the inserted message, nil for a duplicate, and an error.
+	InsertChannelMessage(ctx context.Context, m InsertChannelMessageParams) (*InsertedChannelMessage, error)
+
+	// AddChannelMessageIATA records iata as a site of the packet's message; a no-op when the packet has none.
+	// found says whether the packet has a committed message (its site is then recorded).
+	AddChannelMessageIATA(ctx context.Context, packetHash []byte, iata string) (found bool, err error)
 
 	// UpdateObserverStatus updates the observer row from a /status message. Returns the OberserID
 	// and any error.
 	UpdateObserverStatus(ctx context.Context, p UpdateObserverStatusParams) (uuid.UUID, error)
 
-	// GetObserverLastIATA returns the IATA from the most recent observation for the given observer.
+	// GetObserverLastIATA returns the IATA of the observer's most recent packet, or "" if none.
 	GetObserverLastIATA(ctx context.Context, observerID uuid.UUID) (string, error)
 
 	// InsertObserverTelemetry stores a telemetry snapshot for an observer.
@@ -163,6 +173,9 @@ type DB interface {
 	// ResolvePathHashes returns a list of node UUIDs for the given path hash prefixes and IATA.
 	ResolvePathHashes(ctx context.Context, iata string, hashes [][]byte) (map[string][]api.ResolvedPathEntry, error)
 
+	// ResolveEndpointHashes matches one-byte logical endpoints, including companions.
+	ResolveEndpointHashes(ctx context.Context, iata string, hashes [][]byte) (map[string][]api.ResolvedPathEntry, error)
+
 	// UpsertChannel upserts a channel row by (hash, keyFingerprint) and returns its integer ID.
 	// Pass nil keyFingerprint to record a hash-only row when the key is unknown.
 	UpsertChannel(ctx context.Context, channelHash []byte, keyFingerprint []byte, name string, hashtag string) (int, error)
@@ -174,17 +187,17 @@ type DB interface {
 	UpsertChannelHashOnly(ctx context.Context, channelHash []byte) (int, error)
 
 	// ListUndecryptedGroupTextPackets returns GRP_TXT packets never successfully decrypted --
-	// used by BackfillChannelMessages to retry them against the current keystore at boot.
+	// used by DecryptBackfill to retry them against the current keystore after boot.
 	ListUndecryptedGroupTextPackets(ctx context.Context) ([]UndecryptedPacket, error)
+
+	// ListUndecryptedGroupTextPacketsByHash limits that scan to channels that just gained a key.
+	ListUndecryptedGroupTextPacketsByHash(ctx context.Context, hashes [][]byte) ([]UndecryptedPacket, error)
 
 	// UpsertChannelIATA upserts a channel_iatas row.
 	UpsertChannelIATA(ctx context.Context, channelHash []byte, iata string, heardAt time.Time) error
 
-	// UpsertTraceIATA upserts a trace_iatas row.
-	UpsertTraceIATA(ctx context.Context, traceTag []byte, iata string, heardAt time.Time) error
-
-	// GetPacketObservationCount returns the number of rows for the packet observations
-	GetPacketObservationCount(ctx context.Context, packetHash []byte) (int64, error)
+	// RecordTrace records one hearing of a TRACE packet in trace_iatas and trace_tags.
+	RecordTrace(ctx context.Context, h TraceHearing) error
 
 	// GetTransportScopeByName returns the ID of a transport scope by its normalized name.
 	GetTransportScopeByName(ctx context.Context, name string) (int32, error)
@@ -223,19 +236,22 @@ type ScopeStore interface {
 
 // Worker holds the dependencies for one broker's ingest loop.
 type Worker struct {
+	log              *slog.Logger
 	cfg              Config
 	db               DB
 	hub              *hub.Hub
 	keys             ChannelKeyStore
 	scopes           ScopeStore
-	client           mqtt.Client
+	client           atomic.Pointer[mqtt.Client] // read by /brokers while Start sets it
+	capabilities     capabilityCache
 	onNodeUpsert     func(ctx context.Context, nodeID uuid.UUID)
 	onObserverUpsert func(ctx context.Context, observerID uuid.UUID)
 }
 
 // New creates an ingest Worker. Call Start() to connect and begin processing.
 func New(cfg Config, db DB, h *hub.Hub, keys ChannelKeyStore, scopes ScopeStore) *Worker {
-	return &Worker{cfg: cfg, db: db, hub: h, keys: keys, scopes: scopes}
+	return &Worker{cfg: cfg, db: db, hub: h, keys: keys, scopes: scopes,
+		log: slog.Default().With("component", "ingest", "broker", cfg.BrokerName)}
 }
 
 // BuildObserverPubkeySet normalizes an allowlist of hex observer public keys
@@ -260,13 +276,13 @@ func BuildObserverPubkeySet(pubkeys []string) map[string]struct{} {
 func (w *Worker) passesIngestFilter(iata, pubkeyHex string) bool {
 	if w.cfg.AllowedIATAs != nil {
 		if _, ok := w.cfg.AllowedIATAs[iata]; !ok {
-			log.Printf("ingest[%s]: dropped message from %s (not in allowed IATAs)", w.cfg.BrokerName, iata)
+			w.log.Debug("dropped message outside allowed IATAs")
 			return false
 		}
 	}
 	if w.cfg.AllowedObserverPubkeys != nil {
 		if _, ok := w.cfg.AllowedObserverPubkeys[strings.ToUpper(pubkeyHex)]; !ok {
-			log.Printf("ingest[%s]: dropped message from %s/%s (observer not in allowlist)", w.cfg.BrokerName, iata, pubkeyHex)
+			w.log.Debug("dropped message outside observer allowlist")
 			return false
 		}
 	}
@@ -279,9 +295,33 @@ func (w *Worker) passesIngestFilter(iata, pubkeyHex string) bool {
 //
 // Intended usage: go worker.Start(ctx)
 func (w *Worker) Start(ctx context.Context) {
+	if w.cfg.URL == "" {
+		return
+	}
+	queue := newMessageQueue(8, 2048, 32<<20, func(ctx context.Context, msg mqtt.Message) {
+		w.handleMessageContext(ctx, msg)
+	})
+	reportDrops := func() {
+		if n := queue.takeDropped(); n > 0 {
+			w.log.Error("ingest queue full, messages dropped", "count", n)
+		}
+	}
+	defer func() {
+		drainCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if err := queue.close(drainCtx); err != nil {
+			w.log.Warn("ingest shutdown timed out", "error", err)
+		}
+		reportDrops()
+		w.log.Info("stopped")
+	}()
+
+	// Isolate workers across deployments; Paho reuses this ID on reconnect.
+	// Keep it alphanumeric and within MQTT 3.1's 23-character client ID limit.
+	// Auto-ack: sessions are clean, so deferring acks only throttled the broker's inflight window.
 	opts := mqtt.NewClientOptions().
 		AddBroker(w.cfg.URL).
-		SetClientID(fmt.Sprintf("beacon-%s", w.cfg.BrokerName)).
+		SetClientID(rand.Text()[:23]).
 		SetUsername(w.cfg.Username).
 		SetPassword(w.cfg.Password).
 		SetAutoReconnect(true).
@@ -293,22 +333,35 @@ func (w *Worker) Start(ctx context.Context) {
 		SetConnectRetry(true).
 		SetConnectRetryInterval(5 * time.Second).
 		SetOnConnectHandler(func(c mqtt.Client) {
-			log.Printf("ingest[%s]: connected to %s", w.cfg.BrokerName, w.cfg.URL)
-			w.subscribe(c)
+			w.log.Info("connected")
+			w.subscribe(c, queue)
 		}).
 		SetConnectionLostHandler(func(_ mqtt.Client, err error) {
-			log.Printf("ingest[%s]: connection lost, will reconnect: %v", w.cfg.BrokerName, err)
+			w.log.Warn("connection lost, will reconnect", "error", err)
 		})
 
-	w.client = mqtt.NewClient(opts)
-	if tok := w.client.Connect(); tok.Wait() && tok.Error() != nil {
-		log.Printf("ingest[%s]: initial connect failed: %v", w.cfg.BrokerName, tok.Error())
-		// paho will retry; we fall through and wait for ctx
+	client := mqtt.NewClient(opts)
+	w.client.Store(&client)
+
+	token := client.Connect()
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	connected := token.Done()
+	for {
+		select {
+		case <-connected:
+			if err := token.Error(); err != nil {
+				w.log.Error("initial connect failed", "error", err)
+			}
+			connected = nil
+		case <-ticker.C:
+			reportDrops()
+		case <-ctx.Done():
+			client.Disconnect(500)
+			return
+		}
 	}
 
-	<-ctx.Done()
-	w.client.Disconnect(500)
-	log.Printf("ingest[%s]: stopped", w.cfg.BrokerName)
 }
 
 func (w *Worker) BrokerName() string {
@@ -316,10 +369,11 @@ func (w *Worker) BrokerName() string {
 }
 
 func (w *Worker) IsConnected() bool {
-	if w.client == nil {
+	c := w.client.Load()
+	if c == nil {
 		return false
 	}
-	return w.client.IsConnected()
+	return (*c).IsConnected()
 }
 
 func (w *Worker) SetCacheInvalidators(onNode, onObserver func(ctx context.Context, id uuid.UUID)) {
@@ -328,15 +382,15 @@ func (w *Worker) SetCacheInvalidators(onNode, onObserver func(ctx context.Contex
 }
 
 // subscribe registers the wildcard topic handler after (re)connect.
-func (w *Worker) subscribe(client mqtt.Client) {
+func (w *Worker) subscribe(client mqtt.Client, queue *messageQueue) {
 	// meshcore/{IATA}/{pubkey}/packets
 	// meshcore/{IATA}/{pubkey}/status
 	// We do NOT subscribe to /internal (Role 2 access).
 	tok := client.Subscribe("meshcore/#", 1, func(_ mqtt.Client, msg mqtt.Message) {
-		w.handleMessage(msg)
+		queue.enqueue(msg)
 	})
 	if tok.Wait() && tok.Error() != nil {
-		log.Printf("ingest[%s]: subscribe error: %v", w.cfg.BrokerName, tok.Error())
+		w.log.Error("subscribe error", "error", tok.Error())
 	}
 }
 
@@ -355,10 +409,23 @@ func isValidIATA(s string) bool {
 	return true
 }
 
+// isValidPubkeyHex reports whether s is a 32-byte public key in hex.
+func isValidPubkeyHex(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(s)
+	return err == nil
+}
+
 // handleMessage dispatches incoming MQTT messages by subtopic.
 // Each message is processed with a 30s timeout to prevent slow DB calls
-// from blocking the MQTT receive goroutine indefinitely.
+// from holding a processing worker indefinitely.
 func (w *Worker) handleMessage(msg mqtt.Message) {
+	w.handleMessageContext(context.Background(), msg)
+}
+
+func (w *Worker) handleMessageContext(parent context.Context, msg mqtt.Message) {
 	// Topic shape: meshcore/{IATA}/{pubkey}/{subtopic}
 	parts := strings.SplitN(msg.Topic(), "/", 4)
 	if len(parts) != 4 || parts[0] != "meshcore" {
@@ -369,14 +436,28 @@ func (w *Worker) handleMessage(msg mqtt.Message) {
 	// iata_codes.iata is CHAR(3); anything else would fail the DB insert
 	// downstream, so reject malformed topic segments here instead.
 	if !isValidIATA(iata) {
-		log.Printf("ingest[%s]: dropped packet with malformed IATA %q on topic %s", w.cfg.BrokerName, iata, msg.Topic())
+		w.log.Debug("dropped packet with malformed IATA", "iata", iata, "topic", msg.Topic())
+		return
+	}
+	if !isValidPubkeyHex(pubkeyHex) {
+		w.log.Debug("dropped message with malformed observer pubkey", "pubkey", pubkeyHex, "topic", msg.Topic())
 		return
 	}
 
 	if !w.passesIngestFilter(iata, pubkeyHex) {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Drop packets from IATAs outside the configured geographic filter.
+	if w.cfg.AllowedIATAs != nil {
+		if _, ok := w.cfg.AllowedIATAs[iata]; !ok {
+			if w.log.Enabled(context.Background(), slog.LevelDebug) {
+				w.log.Debug(fmt.Sprintf("dropped packet from %s (not in allowed IATAs)", iata))
+			}
+			return
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
 
 	switch subtopic {
@@ -393,7 +474,7 @@ func (w *Worker) handleMessage(msg mqtt.Message) {
 func (w *Worker) broadcast(eventType hub.EventType, iata string, payloadType uint8, channelHash string, payload any) {
 	b, err := json.Marshal(payload)
 	if err != nil {
-		log.Printf("ingest[%s]: failed to marshal %s event: %v", w.cfg.BrokerName, eventType, err)
+		w.log.Error(fmt.Sprintf("failed to marshal %s event", eventType), "error", err)
 		return
 	}
 	w.hub.Broadcast(hub.Event{
@@ -405,32 +486,50 @@ func (w *Worker) broadcast(eventType hub.EventType, iata string, payloadType uin
 	})
 }
 
-// broadcastPacketObservation marshals evt twice: once as-is (the default
+// broadcastPacketObservation marshals evt once as-is (the default
 // payload every packetObservation subscriber gets) and once with
 // resolvedPath populated (delivered only to connections that opted in via
 // the "configure" WS message; see hub.Client.ResolvePath). resolvedPath is
 // passed in rather than computed here because the caller already has the
 // path-hash resolution results in hand from other per-packet work (known
 // route detection, capability detection) — this adds no extra DB calls.
-func (w *Worker) broadcastPacketObservation(iata string, payloadType uint8, evt packetObservationEvent, resolvedPath []api.ResolvedHop) {
+// Repeats go through the hub's drop-first path.
+func (w *Worker) broadcastPacketObservation(iata string, payloadType uint8, evt packetObservationEvent, resolvedPath []api.ResolvedHop, observerKey string, repeat bool) {
 	base, err := json.Marshal(evt)
 	if err != nil {
-		log.Printf("ingest[%s]: failed to marshal packetObservation event: %v", w.cfg.BrokerName, err)
+		w.log.Error("failed to marshal packetObservation event", "error", err)
 		return
 	}
-	evt.Observation.ResolvedPath = resolvedPath
-	resolved, err := json.Marshal(evt)
-	if err != nil {
-		log.Printf("ingest[%s]: failed to marshal packetObservation event (resolved variant): %v", w.cfg.BrokerName, err)
-		resolved = nil // fall back to base-only; not fatal
+	out := hub.Event{
+		Type:        hub.EventPacketObservation,
+		Payload:     base,
+		IATA:        iata,
+		PayloadType: payloadType,
+		RouteType:   evt.Packet.RouteType,
+		ObserverID:  evt.Observation.ObserverID,
 	}
-	w.hub.Broadcast(hub.Event{
-		Type:            hub.EventPacketObservation,
-		Payload:         base,
-		PayloadResolved: resolved,
-		IATA:            iata,
-		PayloadType:     payloadType,
-	})
+	evt.Observation.ResolvedPath = resolvedPath
+	if out.PayloadResolved, err = json.Marshal(evt); err != nil {
+		w.log.Error("failed to marshal packetObservation event (resolved variant)", "error", err)
+		out.PayloadResolved = nil
+	}
+	if w.hub.ObserverKeyWanted() {
+		evt.Observation.ObserverPublicKey = observerKey
+		if out.PayloadResolvedWithKey, err = json.Marshal(evt); err != nil {
+			w.log.Error("failed to marshal packetObservation event (resolved key variant)", "error", err)
+			out.PayloadResolvedWithKey = nil
+		}
+		evt.Observation.ResolvedPath = nil
+		if out.PayloadWithKey, err = json.Marshal(evt); err != nil {
+			w.log.Error("failed to marshal packetObservation event (key variant)", "error", err)
+			out.PayloadWithKey = nil
+		}
+	}
+	if repeat {
+		w.hub.BroadcastRepeat(out)
+		return
+	}
+	w.hub.Broadcast(out)
 }
 
 // parseNumber handles RSSI and SNR fields that different observer types send as

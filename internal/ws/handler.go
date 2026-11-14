@@ -9,17 +9,31 @@
 //
 //	Client → Server:
 //	  subscribe   { v, type, id, scope }         → server replies subscribed { v, type, id, subscriptionId }
-//	  unsubscribe { v, type, id, subscriptionId }
-//	  configure   { v, type, id, resolvePath }   → server replies configured { v, type, id, resolvePath }
+//	  unsubscribe { v, type, id, subscriptionId } → server replies unsubscribed { v, type, id, subscriptionId }
+//	  configure   { v, type, id, resolvePath, includeObserverKey, includeRepeats }
+//	              → server replies configured { v, type, id, resolvePath, includeObserverKey, includeRepeats }
 //	  ping        { v, type, id }                → server replies pong { v, type, id }
+//
+//	configure's flags are connection-wide settings, not per-subscription.
+//	resolvePath adds per-hop resolvedPath data to packetObservation events,
+//	includeObserverKey adds observation.observerPublicKey, and includeRepeats
+//	also streams later hearings of an already-stored observation over a new
+//	path, as packetObservation events with packet.isRepeat true and
+//	observationCount 0. Each configure sets all three to exactly the values
+//	sent, so an omitted flag turns off. All default false.
 //
 //	Server → Client events (unsolicited):
 //	  packetObservation, observerStatus, nodeUpdate, channelMessage
-//	  lagged { v, type, droppedCount, since, lastObservationId }
-//	  error  { v, type, code, message }
+//	  lagged { v, type, droppedCount, since }
 //
-// Clients should send a ping at least every 30 seconds. Connections with no
-// client messages for 60 seconds are evicted.
+//	lagged also reports events dropped by the per-connection send budget,
+//	at most once per budgetNoticeInterval.
+//
+//	With websocket.require_origin on, an upgrade without an Origin needs a ticket from
+//	GET /api/v1/ws-ticket in the X-Beacon-Ticket header, or it gets 403.
+//
+//	Idle connections (no ping) closed after 90s.
+//	Client should ping every 30s.
 package ws
 
 import (
@@ -28,7 +42,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
+	"net"
 	"net/http"
 	"slices"
 	"strconv"
@@ -36,12 +51,37 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/coder/websocket"
-	"github.com/google/uuid"
-
 	"github.com/MeshCore-Beacon/beacon-server/internal/api"
 	"github.com/MeshCore-Beacon/beacon-server/internal/hub"
+	"github.com/MeshCore-Beacon/beacon-server/internal/wsticket"
+	"github.com/coder/websocket"
+	"github.com/go-chi/httprate"
+	"github.com/google/uuid"
 )
+
+const (
+	pingTimeout = 90 * time.Second // server closes connection if no message received within this window
+)
+
+// budgetNoticeInterval spaces out send-budget lagged notices, since each one makes the client refetch.
+var budgetNoticeInterval = 30 * time.Second
+
+// Limits bounds what one address and one connection may use. A zero send rate means no send budget.
+type Limits struct {
+	MaxConnections       int
+	MaxConnsPerIP        int
+	MaxConnectsPerMinute int
+	SendBytesPerSecond   int
+	SendBurstBytes       int
+}
+
+// Access decides who may open /ws. A browser always sends an Origin; RequireOrigin makes every
+// other client show a ticket instead.
+type Access struct {
+	AllowedOrigins []string
+	RequireOrigin  bool
+	Tickets        *wsticket.Issuer
+}
 
 const (
 	idleTimeout                  = 60 * time.Second
@@ -71,6 +111,7 @@ type Options struct {
 
 // Server owns one WebSocket handler's limiters and metrics.
 type Server struct {
+	serve   http.HandlerFunc
 	h       *hub.Hub
 	reader  api.Reader
 	limits  *admissionLimiter
@@ -94,9 +135,9 @@ func NewHandler(h *hub.Hub, reader api.Reader, opts Options) *Server {
 	}
 	clients, invalidCIDRs := newClientIPResolver(opts.TrustedProxyCIDRs)
 	for _, cidr := range invalidCIDRs {
-		log.Printf("ws: ignoring invalid trusted proxy CIDR %q", cidr)
+		slog.Warn("ws: ignoring invalid trusted proxy CIDR", "cidr", cidr)
 	}
-	return &Server{
+	s := &Server{
 		h:       h,
 		reader:  reader,
 		limits:  newAdmissionLimiter(opts.MaxConnections, opts.MaxConnectionsPerIP, opts.HandshakesPerMinute, handshakeWindow),
@@ -105,156 +146,237 @@ func NewHandler(h *hub.Hub, reader api.Reader, opts Options) *Server {
 		idleFor: idleTimeout,
 		writeIn: writeTimeout,
 	}
+	s.serve = s.handler(Limits{MaxConnections: opts.MaxConnections, MaxConnsPerIP: opts.MaxConnectionsPerIP, MaxConnectsPerMinute: opts.HandshakesPerMinute}, Access{})
+	return s
+
 }
 
-// Handler preserves the original constructor for internal callers. New code
-// should use NewHandler so its metrics endpoint can be mounted as well.
-func Handler(h *hub.Hub, reader api.Reader, maxConnectionsPerIP int) http.HandlerFunc {
-	server := NewHandler(h, reader, Options{MaxConnectionsPerIP: maxConnectionsPerIP})
-	return server.ServeHTTP
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.serve(w, r) }
+func NewTransport(h *hub.Hub, reader api.Reader, limits Limits, access Access) *Server {
+	if limits.MaxConnections <= 0 {
+		limits.MaxConnections = 1000
+	}
+	s := &Server{h: h, reader: reader, now: time.Now, idleFor: pingTimeout, writeIn: writeTimeout}
+	s.serve = s.handler(limits, access)
+	return s
 }
 
-// ServeHTTP upgrades an admitted request and runs its read/write pumps.
-func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	ip := s.clients.clientIP(r)
-	if result := s.limits.acquire(ip); result != admissionAllowed {
-		s.metrics.connectionRejections.Add(1)
-		w.Header().Set("Retry-After", "60")
-		log.Printf("ws: rejected connection from %s: %s", ip, result)
-		http.Error(w, "websocket connection limit exceeded", http.StatusTooManyRequests)
-		return
+// Handler serves the current protocol with bounded admission, messages and writes.
+func Handler(h *hub.Hub, reader api.Reader, limits Limits, access Access) http.HandlerFunc {
+	s := NewTransport(h, reader, limits, access)
+	return s.ServeHTTP
+}
+func (s *Server) handler(limits Limits, access Access) http.HandlerFunc {
+	h, reader := s.h, s.reader
+	_ = reader
+
+	acceptOpts := &websocket.AcceptOptions{
+		OriginPatterns: access.AllowedOrigins,
+		// The live feed is repetitive JSON; a shared window cuts its bytes ~3x for ~1.2 MB per socket.
+		CompressionMode: websocket.CompressionContextTakeover,
 	}
-	defer s.limits.release(ip)
-
-	conn, err := websocket.Accept(w, r, nil)
-	if err != nil {
-		log.Printf("ws: failed to accept connection from %s: %v", ip, err)
-		return
-	}
-	defer conn.CloseNow()
-	conn.SetReadLimit(maxMessageBytes)
-
-	s.metrics.connections.Add(1)
-	s.metrics.activeConnections.Add(1)
-	defer s.metrics.activeConnections.Add(-1)
-
-	connID := uuid.NewString()
-	client := s.h.NewClient()
-	defer s.h.Remove(client)
-
-	ctx, cancel := context.WithCancel(r.Context())
-	defer cancel()
-	var evictionRecorded atomic.Bool
-	recordEviction := func(kind evictionKind) {
-		if evictionRecorded.CompareAndSwap(false, true) {
-			s.metrics.recordEviction(kind)
+	plainOpts := &websocket.AcceptOptions{OriginPatterns: access.AllowedOrigins, CompressionMode: websocket.CompressionDisabled}
+	limiter := newIPLimiter(limits.MaxConnsPerIP)
+	global := newIPLimiter(limits.MaxConnections)
+	attempts := httprate.NewRateLimiter(limits.MaxConnectsPerMinute, time.Minute,
+		httprate.WithResponseHeaders(httprate.ResponseHeaders{RetryAfter: "Retry-After"}))
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.clients != nil {
+			clone := r.Clone(r.Context())
+			clone.RemoteAddr = s.clients.clientIP(r)
+			r = clone
 		}
-	}
-
-	hello := map[string]any{
-		"v":            1,
-		"type":         "hello",
-		"serverTime":   s.now().UnixMilli(),
-		"connectionId": connID,
-	}
-	if err := s.writeJSON(ctx, conn, hello); err != nil {
-		log.Printf("ws[%s]: failed to send hello: %v", connID, err)
-		if errors.Is(err, errWriteTimeout) {
-			recordEviction(evictionWriteTimeout)
+		ip := r.RemoteAddr
+		if host, _, err := net.SplitHostPort(ip); err == nil {
+			ip = host
 		}
-		return
-	}
-	log.Printf("ws[%s]: connected from %s", connID, ip)
-
-	// Write pump: forward hub events to the WebSocket connection.
-	go func() {
-		for {
-			select {
-			case evt, ok := <-client.Send:
-				if !ok {
-					return
-				}
-				msg := map[string]any{
-					"v":     1,
-					"type":  "event",
-					"event": evt.Type,
-					"data":  json.RawMessage(evt.Payload),
-				}
-				if err := s.writeJSON(ctx, conn, msg); err != nil {
-					log.Printf("ws[%s]: failed to write hub event: %v", connID, err)
-					if errors.Is(err, errWriteTimeout) {
-						recordEviction(evictionWriteTimeout)
-					}
-					cancel()
-					return
-				}
-
-			case lag, ok := <-client.LaggedCH():
-				if !ok {
-					return
-				}
-				msg := map[string]any{
-					"v":            1,
-					"type":         "lagged",
-					"droppedCount": lag.DroppedCount,
-					"since":        s.now().UnixMilli(),
-				}
-				if err := s.writeJSON(ctx, conn, msg); err != nil {
-					log.Printf("ws[%s]: failed to write lagged notice: %v", connID, err)
-					if errors.Is(err, errWriteTimeout) {
-						recordEviction(evictionWriteTimeout)
-					}
-					cancel()
-					return
-				}
-
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
-	messageRate := newMessageLimiter(messagesPerMinute, messageBurst, s.now())
-	for {
-		readCtx, readCancel := context.WithTimeout(ctx, s.idleFor)
-		messageType, raw, readErr := conn.Read(readCtx)
-		idle := errors.Is(readCtx.Err(), context.DeadlineExceeded)
-		readCancel()
-		if readErr != nil {
-			switch {
-			case idle:
-				recordEviction(evictionIdle)
-				_ = conn.Close(websocket.StatusPolicyViolation, "idle timeout")
-			case websocket.CloseStatus(readErr) == websocket.StatusMessageTooBig:
-				s.metrics.messageRejections.Add(1)
-				log.Printf("ws[%s]: message exceeded %d-byte limit", connID, maxMessageBytes)
-			case ctx.Err() == nil && websocket.CloseStatus(readErr) == -1:
-				log.Printf("ws[%s]: read error: %v", connID, readErr)
-			}
+		// Count attempts before Accept, including failed handshakes. RemoteAddr
+		// was already resolved by TrustedProxyIP; never read forwarding headers here.
+		// Both limits share an IPv6 /64, so rotating addresses inside one doesn't add sockets.
+		key := wsticket.ClientKey(r)
+		if attempts.RespondOnLimit(w, r, key) {
+			s.metrics.connectionRejections.Add(1)
 			return
 		}
-
-		s.metrics.messagesReceived.Add(1)
-		if !messageRate.allow(s.now()) {
-			s.metrics.messageRejections.Add(1)
-			_ = s.writeError(ctx, conn, "rate_limit", "client message rate limit exceeded", "")
-			recordEviction(evictionMessageRate)
-			_ = conn.Close(websocket.StatusPolicyViolation, "message rate limit")
+		if access.RequireOrigin && r.Header.Get("Origin") == "" && !access.Tickets.Valid(r.Header.Get(wsticket.Header), key) {
+			http.Error(w, "an Origin or a ticket is required", http.StatusForbidden)
 			return
 		}
-		if messageType != websocket.MessageText {
-			s.metrics.messageRejections.Add(1)
-			if err := s.writeError(ctx, conn, "invalid_message", "text messages are required", ""); err != nil {
-				return
-			}
-			continue
+		if !global.acquire("all") {
+			s.metrics.connectionRejections.Add(1)
+			w.Header().Set("Retry-After", "60")
+			http.Error(w, "websocket connection limit exceeded", http.StatusTooManyRequests)
+			return
 		}
-		if err := s.handleClientMessage(ctx, client, conn, connID, raw); err != nil {
-			log.Printf("ws[%s]: failed to handle client message: %v", connID, err)
-			if errors.Is(err, errWriteTimeout) {
+		defer global.release("all")
+		opts := plainOpts
+		if compressesFor(r.UserAgent()) {
+			opts = acceptOpts
+		}
+		conn, err := websocket.Accept(w, r, opts)
+		if err != nil {
+			slog.Warn("ws: failed to accept connection", "component", "ws", "error", err)
+			return
+		}
+		defer conn.CloseNow()
+		conn.SetReadLimit(maxMessageBytes)
+		if !limiter.acquire(key) {
+			s.metrics.connectionRejections.Add(1)
+			// This attempt passed the rate budget. Give the accepted socket a
+			// browser-visible backoff signal before allocating a hub client.
+			slog.Warn("ws: connection limit reached", "component", "ws", "client_ip", ip)
+			_ = conn.Close(websocket.StatusTryAgainLater, "connection limit reached")
+			return
+		}
+		defer limiter.release(key)
+		s.metrics.connections.Add(1)
+		s.metrics.activeConnections.Add(1)
+		defer s.metrics.activeConnections.Add(-1)
+		var evictionRecorded atomic.Bool
+		recordEviction := func(kind evictionKind) {
+			if evictionRecorded.CompareAndSwap(false, true) {
+				s.metrics.recordEviction(kind)
+			}
+		}
+		write := func(ctx context.Context, kind websocket.MessageType, payload []byte) error {
+			writeCtx, cancelWrite := context.WithTimeout(ctx, s.writeIn)
+			defer cancelWrite()
+			err := conn.Write(writeCtx, kind, payload)
+			if err == nil {
+				s.metrics.messagesSent.Add(1)
+			} else if errors.Is(writeCtx.Err(), context.DeadlineExceeded) {
 				recordEviction(evictionWriteTimeout)
 			}
+			return err
+		}
+
+		connID := uuid.NewString()
+		client := h.NewClient()
+		defer h.Remove(client)
+
+		ctx, cancel := context.WithCancel(r.Context())
+		defer cancel()
+
+		// Send hello
+		hello := map[string]any{
+			"v":            1,
+			"type":         "hello",
+			"serverTime":   time.Now().UnixMilli(),
+			"connectionId": connID,
+		}
+		helloBytes, _ := json.Marshal(hello)
+		slog.Debug("connected", "component", "ws", "connection_id", connID)
+		err = write(ctx, websocket.MessageText, helloBytes)
+		if err != nil {
+			slog.Warn(fmt.Sprintf("ws[%s]: failed to send hello", connID), "component", "ws", "error", err)
 			return
+		}
+
+		// Write pump: forward hub events to the WS connection.
+		go func() {
+			budget := newSendBudget(limits.SendBytesPerSecond, limits.SendBurstBytes, time.Now())
+			budgetDropped := 0
+			var lastNotice time.Time
+			var noticeDue <-chan time.Time
+			writeLagged := func(dropped int) error {
+				lagged := map[string]any{
+					"v":            1,
+					"type":         "lagged",
+					"droppedCount": dropped,
+					"since":        time.Now().UnixMilli(),
+				}
+				lagBytes, _ := json.Marshal(lagged)
+				return write(ctx, websocket.MessageText, lagBytes)
+			}
+			for {
+				select {
+				case evt, ok := <-client.Send:
+					if !ok {
+						return
+					}
+					msg := map[string]any{
+						"v":     1,
+						"type":  "event",
+						"event": evt.Type,
+						"data":  json.RawMessage(evt.Payload),
+					}
+					msgBytes, _ := json.Marshal(msg)
+					if !budget.allow(len(msgBytes), time.Now()) {
+						budgetDropped++
+						if noticeDue == nil {
+							noticeDue = time.After(time.Until(lastNotice.Add(budgetNoticeInterval)))
+						}
+						continue
+					}
+					if err := write(ctx, websocket.MessageText, msgBytes); err != nil {
+						slog.Warn(fmt.Sprintf("ws[%s]: failed to write hub event", connID), "component", "ws", "error", err)
+						cancel()
+						return
+					}
+
+				case <-noticeDue:
+					noticeDue = nil
+					slog.Warn(fmt.Sprintf("ws[%s]: send budget exceeded, dropped events", connID), "component", "ws", "client_ip", ip, "dropped", budgetDropped)
+					if err := writeLagged(budgetDropped); err != nil {
+						slog.Warn(fmt.Sprintf("ws[%s]: failed to write lagged notice", connID), "component", "ws", "error", err)
+						cancel()
+						return
+					}
+					budgetDropped = 0
+					lastNotice = time.Now()
+
+				case lag, ok := <-client.LaggedCH():
+					if !ok {
+						return
+					}
+					if err := writeLagged(lag.DroppedCount); err != nil {
+						slog.Warn(fmt.Sprintf("ws[%s]: failed to write lagged notice", connID), "component", "ws", "error", err)
+						cancel()
+						return
+					}
+
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+
+		messageRate := newMessageLimiter(messagesPerMinute, messageBurst, s.now())
+		// Read pump: handle subscribe / unsubscribe / ping from the client.
+		// Drives the idle timeout; any message resets the deadline.
+		for {
+			readCtx, readCancel := context.WithTimeout(ctx, s.idleFor)
+			messageType, msgBytes, err := conn.Read(readCtx)
+			idle := errors.Is(readCtx.Err(), context.DeadlineExceeded)
+			readCancel()
+			if err != nil {
+				if idle {
+					recordEviction(evictionIdle)
+					_ = conn.Close(websocket.StatusPolicyViolation, "idle timeout")
+				}
+				if websocket.CloseStatus(err) == websocket.StatusMessageTooBig {
+					s.metrics.messageRejections.Add(1)
+				}
+				return
+			}
+			s.metrics.messagesReceived.Add(1)
+			if !messageRate.allow(s.now()) {
+				s.metrics.messageRejections.Add(1)
+				_ = s.writeError(ctx, conn, "rate_limit", "client message rate limit exceeded", "")
+				recordEviction(evictionMessageRate)
+				_ = conn.Close(websocket.StatusPolicyViolation, "message rate limit")
+				return
+			}
+			if messageType != websocket.MessageText {
+				s.metrics.messageRejections.Add(1)
+				if err := s.writeError(ctx, conn, "invalid_message", "text messages are required", ""); err != nil {
+					return
+				}
+				continue
+			}
+			if err := s.handleClientMessage(ctx, client, conn, connID, msgBytes); err != nil {
+				return
+			}
 		}
 	}
 }
@@ -266,9 +388,14 @@ type clientMessage struct {
 	ID             string          `json:"id"`
 	SubscriptionID string          `json:"subscriptionId,omitempty"`
 	Scope          *subscribeScope `json:"scope,omitempty"`
-	ResolvePath    bool            `json:"resolvePath,omitempty"`
+
+	// Only read for "configure" messages. See package doc.
+	ResolvePath        bool `json:"resolvePath,omitempty"`
+	IncludeObserverKey bool `json:"includeObserverKey,omitempty"`
+	IncludeRepeats     bool `json:"includeRepeats,omitempty"`
 }
 
+// subscribeScope mirrors the scope object in the subscribe message.
 type subscribeScope struct {
 	IATAs         []string        `json:"iatas"`
 	RegionIDs     []string        `json:"regionIds"`
@@ -303,7 +430,7 @@ func (s *Server) handleClientMessage(ctx context.Context, client *hub.Client, co
 			s.metrics.messageRejections.Add(1)
 			return s.writeError(ctx, conn, "subscription_limit", fmt.Sprintf("at most %d subscriptions are allowed", hub.MaxSubscriptionsPerClient), msg.ID)
 		}
-		log.Printf("ws[%s]: subscribed %s -> %s", connID, msg.ID, subID)
+		slog.Debug("ws: subscribed", "component", "ws", "subscription_id", subID)
 		return s.writeJSON(ctx, conn, map[string]any{
 			"v": 1, "type": "subscribed", "id": msg.ID, "subscriptionId": subID,
 		})
@@ -314,15 +441,15 @@ func (s *Server) handleClientMessage(ctx context.Context, client *hub.Client, co
 			return s.writeError(ctx, conn, "invalid_subscription", "subscriptionId is required", msg.ID)
 		}
 		s.h.RemoveScope(client, msg.SubscriptionID)
-		log.Printf("ws[%s]: unsubscribed %s", connID, msg.SubscriptionID)
+		slog.Debug("ws: unsubscribed", "component", "ws")
 		return s.writeJSON(ctx, conn, map[string]any{
 			"v": 1, "type": "unsubscribed", "id": msg.ID, "subscriptionId": msg.SubscriptionID,
 		})
 
 	case "configure":
-		s.h.SetResolvePath(client, msg.ResolvePath)
+		s.h.Configure(client, hub.ClientOptions{ResolvePath: msg.ResolvePath, IncludeObserverKey: msg.IncludeObserverKey, IncludeRepeats: msg.IncludeRepeats})
 		return s.writeJSON(ctx, conn, map[string]any{
-			"v": 1, "type": "configured", "id": msg.ID, "resolvePath": msg.ResolvePath,
+			"v": 1, "type": "configured", "id": msg.ID, "resolvePath": msg.ResolvePath, "includeObserverKey": msg.IncludeObserverKey, "includeRepeats": msg.IncludeRepeats,
 		})
 
 	case "ping":

@@ -9,9 +9,10 @@ RUN go mod download
 COPY . .
 RUN go build -o beacon ./cmd/beacon
 
-# alpine:3.19
-FROM alpine@sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1
-RUN apk add --no-cache ca-certificates tzdata
+# alpine:3.24
+FROM alpine@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
+ARG POSTGRES_CLIENT_MAJOR=16
+RUN apk add --no-cache ca-certificates tzdata postgresql${POSTGRES_CLIENT_MAJOR}-client
 WORKDIR /app
 COPY --from=builder /app/beacon .
 CMD ["./beacon"]

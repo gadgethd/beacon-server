@@ -9,8 +9,8 @@ import "strings"
 // their advertised node name to opt the node's location out of public display.
 // When present, Beacon strips the node's coordinates from every list, detail,
 // neighbor, path-resolution, and live-update response. The coordinates are
-// still stored (the marker is reversible by re-advertising without it) but are
-// never sent to clients, so a redacted node simply has no location: it drops
+// cleared from storage on each marked advert and masked on reads. A redacted
+// node simply has no location: it drops
 // off the map and shows "—" in the nodes list.
 const LocationRedactionMarker = "🚫"
 

@@ -92,18 +92,25 @@ func (s *Store) UpsertRegion(ctx context.Context, slug, name, description string
 	})
 }
 
-func (s *Store) ListRegions(ctx context.Context) ([]api.RegionSummary, error) {
+func (s *Store) ListRegions(ctx context.Context) ([]api.Region, error) {
 	rows, err := s.q.ListRegions(ctx)
 	if err != nil {
 		return nil, err
 	}
-	regions := make([]api.RegionSummary, 0, len(rows))
+	regions := make([]api.Region, 0, len(rows))
 	for _, v := range rows {
-		regions = append(regions, api.RegionSummary{
-			ID:   int(v.ID),
-			Slug: v.Slug,
-			Name: v.Name,
-		})
+		region := api.Region{
+			RegionSummary: api.RegionSummary{ID: int(v.ID), Slug: v.Slug, Name: v.Name},
+			Description:   v.Description,
+			CenterLat:     v.CenterLat,
+			CenterLng:     v.CenterLng,
+			IATAs:         v.Iatas,
+		}
+		if v.ZoomLevel != nil {
+			z := int(*v.ZoomLevel)
+			region.ZoomLevel = &z
+		}
+		regions = append(regions, region)
 	}
 	return regions, nil
 }
@@ -166,9 +173,13 @@ func (s *Store) GetRegionBySlug(ctx context.Context, slug string) (*api.Region, 
 	return &result, nil
 }
 
-func (s *Store) UpsertRegionIATA(ctx context.Context, regionID int32, iata string) error {
-	return s.q.UpsertRegionIATA(ctx, sqlc.UpsertRegionIATAParams{
-		RegionID: regionID,
-		Iata:     iata,
-	})
+// SetRegionIATAs makes iatas the region's exact member list.
+func (s *Store) SetRegionIATAs(ctx context.Context, regionID int32, iatas []string) error {
+	if iatas == nil {
+		iatas = []string{}
+	}
+	if err := s.q.DeleteRegionIATAsNotIn(ctx, sqlc.DeleteRegionIATAsNotInParams{RegionID: regionID, Keep: iatas}); err != nil {
+		return err
+	}
+	return s.q.AddRegionIATAs(ctx, sqlc.AddRegionIATAsParams{RegionID: regionID, Iatas: iatas})
 }

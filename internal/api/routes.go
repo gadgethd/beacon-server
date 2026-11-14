@@ -3,7 +3,23 @@
 
 package api
 
-import "github.com/google/uuid"
+import (
+	"errors"
+
+	"github.com/google/uuid"
+)
+
+// ErrRouteSearchTooBroad means an endpoint hash matches too widely to search.
+var ErrRouteSearchTooBroad = errors.New("hash matches too many areas; use a longer hash or fewer iatas")
+
+// CrossRouteSearch finds routes from FromHash (resolved in FromIATAs) to ToHash
+// (resolved in ToIATAs) that cross between two different IATAs. Empty lists mean every IATA.
+type CrossRouteSearch struct {
+	FromHash  string
+	ToHash    string
+	FromIATAs []string
+	ToIATAs   []string
+}
 
 // RouteHop is a single resolved hop in a known route.
 type RouteHop struct {
@@ -16,6 +32,7 @@ type RouteHop struct {
 // have been confirmed as high confidence.
 type KnownRoute struct {
 	ID               int64      `json:"id"`
+	PathKey          string     `json:"pathKey,omitempty"` // stable identity within this IATA; use for route evidence links
 	IATA             string     `json:"iata"`
 	HopCount         int32      `json:"hopCount"`
 	Hops             []RouteHop `json:"hops"`

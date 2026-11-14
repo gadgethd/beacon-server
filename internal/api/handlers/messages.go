@@ -37,10 +37,11 @@ func MessagesRouter(reader api.Reader) http.Handler {
 //	@Param		region		query		string	false	"Filter by region slug, expands to member IATAs"
 //	@Param		scope		query		string	false	"Filter by transport scope name e.g. %23bc (URL-encoded #bc)"
 //	@Param		cursor	query		int		false	"Message ID of last item for pagination (results ordered newest first)"
-//	@Param		limit		query		int		false	"Max results (default 20, max 100)"
+//	@Param		limit		query		int		false	"Max results (default 50); must be positive, values above 200 are clamped" minimum(1) maximum(200)
 //	@Success	200			{object}	object
 //	@Failure	400			{object}	handlers.APIError
 //	@Failure	500			{object}	handlers.APIError
+//	@Failure	503				{object}	handlers.APIError	"Not available yet, or the server is busy: retry after Retry-After seconds"
 //	@Router		/messages [get]
 func listMessages(reader api.Reader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -60,7 +61,7 @@ func listMessages(reader api.Reader) http.HandlerFunc {
 			}
 			id = i
 		}
-		limit, err := parseLimit(r)
+		limit, err := parseLimit(r, 50)
 		if err != nil {
 			respondError(w, http.StatusBadRequest, err.Error())
 			return
@@ -104,7 +105,9 @@ func listMessages(reader api.Reader) http.HandlerFunc {
 			messages, err = reader.ListChannelMessages(r.Context(), nil, since, limit, iatas, scope, cursor)
 		}
 		if err != nil {
-			respondError(w, http.StatusInternalServerError, "internal server error")
+			if !respondUnavailableFor(w, err, modelCmi) {
+				respondReaderError(w, err, "internal server error")
+			}
 			return
 		}
 		respond(w, http.StatusOK, messages)
@@ -121,10 +124,11 @@ func listMessages(reader api.Reader) http.HandlerFunc {
 //	@Param		region		query		string	false	"Filter by region slug"
 //	@Param		regionId	query		int		false	"Filter by region ID"
 //	@Param		scope		query		string	false	"Filter by transport scope name"
-//	@Param		limit		query		int		false	"Max results (default 20, max 100)"
+//	@Param		limit		query		int		false	"Max results (default 100); must be positive, values above 200 are clamped" minimum(1) maximum(200)
 //	@Success	200			{object}	[]api.ChannelMessage
 //	@Failure	400			{object}	handlers.APIError
 //	@Failure	500			{object}	handlers.APIError
+//	@Failure	503			{object}	handlers.APIError	"The read took too long: retry after Retry-After seconds"
 //	@Router		/messages/backfill [get]
 func listMessagesBackfill(reader api.Reader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -138,7 +142,7 @@ func listMessagesBackfill(reader api.Reader) http.HandlerFunc {
 			respondError(w, http.StatusBadRequest, "afterId must be an integer")
 			return
 		}
-		limit, err := parseLimit(r)
+		limit, err := parseLimit(r, 100)
 		if err != nil {
 			respondError(w, http.StatusBadRequest, err.Error())
 			return
@@ -147,7 +151,7 @@ func listMessagesBackfill(reader api.Reader) http.HandlerFunc {
 		if regionIDStr := r.URL.Query().Get("regionId"); regionIDStr != "" || r.URL.Query().Get("region") != "" {
 			regionIATAs, err := resolveRegionIATAs(r.Context(), r.URL.Query().Get("regionId"), r.URL.Query().Get("region"), reader)
 			if err != nil {
-				respondError(w, http.StatusBadRequest, err.Error())
+				respondRegionError(w, err)
 				return
 			}
 			iatas = append(iatas, regionIATAs...)
@@ -155,7 +159,7 @@ func listMessagesBackfill(reader api.Reader) http.HandlerFunc {
 		scope := r.URL.Query().Get("scope")
 		messages, err := reader.ListMessagesAfterID(r.Context(), afterID, iatas, scope, limit)
 		if err != nil {
-			respondError(w, http.StatusInternalServerError, "internal server error")
+			respondReaderError(w, err, "internal server error")
 			return
 		}
 		respond(w, http.StatusOK, messages)

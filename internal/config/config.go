@@ -7,15 +7,29 @@ package config
 
 import (
 	"fmt"
+	"net"
+	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
 	"time"
+	"unicode"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/MeshCore-Beacon/beacon-server/db/planpolicy"
 )
 
 // Config is the top-level structure of the Beacon config file.
 type Config struct {
+	Auth        AuthConfig            `yaml:"auth"`
+	Backup      BackupConfig          `yaml:"backup"`
+	Log         LogConfig             `yaml:"log"`
+	Server      ServerConfig          `yaml:"server"`
 	IATAs       map[string]IATAConfig `yaml:"iatas"`
 	Regions     []RegionConfig        `yaml:"regions"`
 	ChannelKeys ChannelKeysConfig     `yaml:"channel_keys"`
@@ -25,25 +39,200 @@ type Config struct {
 	Routes      RoutesConfig          `yaml:"routes"`
 	Ingest      IngestFilterConfig    `yaml:"ingest"`
 	Scopes      []ScopeConfig         `yaml:"scopes"`
+	MeshMapper  MeshMapperConfig      `yaml:"meshmapper"`
 	Cache       CacheConfig           `yaml:"cache"`
 	CORS        CORSConfig            `yaml:"cors"`
+	RateLimit   RateLimitConfig       `yaml:"ratelimit"`
 	Background  BackgroundConfig      `yaml:"background"`
 	Presence    PresenceConfig        `yaml:"presence"`
 	Nodes       NodesConfig           `yaml:"nodes"`
+	Observers   ObserversConfig       `yaml:"observers"`
+	Analytics   AnalyticsConfig       `yaml:"analytics"`
+	Mobile      MobileConfig          `yaml:"mobile"`
+	Web         WebConfig             `yaml:"web"`
+	Database    DatabaseConfig        `yaml:"database"`
+	Guards      GuardsConfig          `yaml:"guards"`
+	Planguard   PlanguardConfig       `yaml:"planguard"`
+	ReadModels  ReadModelsConfig      `yaml:"readmodels"`
+}
+
+// ReadModelsConfig switches serving pages from each read model and paces their one-off backfills.
+type ReadModelsConfig struct {
+	Cmi         ReadModelConfig `yaml:"cmi"`
+	PacketSites ReadModelConfig `yaml:"packet_sites"`
+	Fill        FillConfig      `yaml:"fill"`
+}
+
+// FillConfig paces the one-off backfills (packet_sites, cmi and observation payload types). After each slice or
+// batch a fill sleeps max(min_pause, elapsed × (1 − duty) / duty), where elapsed is that slice's run time, so it is
+// busy at most duty of the time and a slow disk stretches the pauses on its own. Unset fields take the defaults.
+type FillConfig struct {
+	Duty             *float64  `yaml:"duty"`               // 0.01 to 1; default 0.5
+	MinPause         *duration `yaml:"min_pause"`          // 0 to 1m; default 100ms
+	PacketSitesSlice *int64    `yaml:"packet_sites_slice"` // observations per packet_sites slice; default 500000
+	CmiBatch         *int64    `yaml:"cmi_batch"`          // message ids per cmi batch; default 10000
+}
+
+// Fill pacing defaults and limits.
+const (
+	defaultFillDuty             = 0.5
+	minFillDuty                 = 0.01 // db.MinFillDuty: 1 % busy
+	defaultFillMinPause         = 100 * time.Millisecond
+	defaultFillPacketSitesSlice = 500_000
+	defaultFillCmiBatch         = 10_000
+	maxFillMinPause             = time.Minute
+	maxFillPacketSitesSlice     = 10_000_000
+	maxFillCmiBatch             = 1_000_000
+)
+
+// validate checks each set value's range.
+func (f FillConfig) validate() error {
+	if d := f.Duty; d != nil && !(*d >= minFillDuty && *d <= 1) { // also rejects NaN
+		return fmt.Errorf("readmodels.fill.duty must be between %v and 1, got %v", minFillDuty, *d)
+	}
+	if d := f.MinPause; d != nil && (d.Duration < 0 || d.Duration > maxFillMinPause) {
+		return fmt.Errorf("readmodels.fill.min_pause must be between 0s and %s, got %s", maxFillMinPause, d.Duration)
+	}
+	if n := f.PacketSitesSlice; n != nil && (*n < 1 || *n > maxFillPacketSitesSlice) {
+		return fmt.Errorf("readmodels.fill.packet_sites_slice must be between 1 and %d, got %d", maxFillPacketSitesSlice, *n)
+	}
+	if n := f.CmiBatch; n != nil && (*n < 1 || *n > maxFillCmiBatch) {
+		return fmt.Errorf("readmodels.fill.cmi_batch must be between 1 and %d, got %d", maxFillCmiBatch, *n)
+	}
+	return nil
+}
+
+// ReadModelConfig controls one read model. Enabled false turns the pages it serves off (they answer 503 with
+// Retry-After); the model is still maintained, so turning it back on needs only a restart.
+type ReadModelConfig struct {
+	Enabled *bool `yaml:"enabled"` // nil = true
+}
+
+// PlanguardConfig controls the daily read-only plan regression check.
+type PlanguardConfig struct {
+	// DailyCheck runs the check about an hour after boot and then daily. Off by default: the corpus's plan
+	// expectations assume production-sized tables, so small deployments would report false failures.
+	DailyCheck bool `yaml:"daily_check"`
+}
+
+// DatabaseConfig controls how API statements are spread across connection pools.
+type DatabaseConfig struct {
+	// APIPlanLayout is custom_all (default), split or single.
+	APIPlanLayout string `yaml:"api_plan_layout"`
+	// SlowPoolSize sized the api_slow pool, which no longer exists. The key is read only so the server can warn that
+	// it is ignored (see IgnoredKeys).
+	SlowPoolSize *int `yaml:"slow_pool_size"`
+}
+
+// IgnoredKeys lists the keys this config sets that the server no longer reads, for a startup warning.
+func (c *Config) IgnoredKeys() []string {
+	var keys []string
+	if c.Database.SlowPoolSize != nil {
+		keys = append(keys, "database.slow_pool_size")
+	}
+	return keys
+}
+
+// GuardsConfig controls the cost guards on the public API.
+type GuardsConfig struct {
+	// Enforce lists the guard families that refuse; every other family only observes.
+	Enforce []string `yaml:"enforce"`
+	// Budget must be shadow: the per-client DB-time budget only records.
+	Budget string `yaml:"budget"`
+}
+
+// guardFamilies are the guard family names accepted by guards.enforce, in display order.
+var guardFamilies = []string{"routes", "channel_messages", "packets_global", "packets_region", "packets_window", "packet_detail", "stats", "other"}
+
+// MobileConfig holds settings the BEACON Mobile app reads from /info.
+type MobileConfig struct {
+	// MinAppVersion is the oldest app version (X.Y.Z) allowed to use this server; empty means any.
+	MinAppVersion string `yaml:"min_app_version"`
+}
+
+// WebConfig holds settings Beacon Web reads from /info.
+type WebConfig struct {
+	// MinWebVersion raises the built-in Beacon Web floor (X.Y.Z); it can't lower it.
+	MinWebVersion string `yaml:"min_web_version"`
+}
+
+// BackupConfig enables protected downloads. Disabled by default.
+type BackupConfig struct {
+	Enabled bool `yaml:"enabled"`
+}
+
+// AuthConfig holds the operator key for the protected admin subtree.
+// The key is excluded from JSON; it must not be exposed by configuration APIs.
+type AuthConfig struct {
+	APIKey string `yaml:"api_key" json:"-"`
+}
+
+// LogConfig controls application verbosity and stderr output format.
+type LogConfig struct {
+	Level  string `yaml:"level"`
+	Format string `yaml:"format"`
+}
+
+// ServerConfig controls which direct peers may supply the client address.
+type ServerConfig struct {
+	// TrustedProxies accepts IPv4/IPv6 CIDRs; an empty list trusts no proxy.
+	// netip.Prefix validates each CIDR while the configuration is loaded.
+	TrustedProxies []netip.Prefix `yaml:"trusted_proxies"`
+	// AdminListen is the host:port of the admin listener serving /metrics; empty disables it.
+	AdminListen string `yaml:"admin_listen"`
+	// ReadOnly boots a server with no migrations, ingest, jobs or boot writes; every database session is read-only.
+	ReadOnly bool `yaml:"read_only"`
+}
+
+func (c *ServerConfig) UnmarshalYAML(node *yaml.Node) error {
+	// Pointers retain null list entries, which yaml would otherwise discard.
+	// Leave them as invalid prefixes for Load's validation below.
+	var raw struct {
+		TrustedProxies []*netip.Prefix `yaml:"trusted_proxies"`
+		AdminListen    string          `yaml:"admin_listen"`
+		ReadOnly       bool            `yaml:"read_only"`
+	}
+	if err := node.Decode(&raw); err != nil {
+		return err
+	}
+	c.TrustedProxies = make([]netip.Prefix, len(raw.TrustedProxies))
+	for i, prefix := range raw.TrustedProxies {
+		if prefix != nil {
+			c.TrustedProxies[i] = *prefix
+		}
+	}
+	c.AdminListen = raw.AdminListen
+	c.ReadOnly = raw.ReadOnly
+	return nil
 }
 
 // ResolvedConfig holds all runtime configuration with defaults applied.
+type ResolvedWebSocketConfig struct {
+	MaxConnections      int
+	MaxConnectionsPerIP int
+	HandshakesPerMinute int
+	TrustedProxyCIDRs   []string
+}
+
 type ResolvedConfig struct {
+	WebSocket            ResolvedWebSocketConfig
+	RateLimit            ResolvedRateLimitConfig
 	TelemetryResolution  time.Duration
 	TelemetryRetention   time.Duration
+	RollupRetention      time.Duration
 	PacketRetention      time.Duration
 	RouteRetention       time.Duration
 	RouteGrace           time.Duration
 	RouteMinObservations int
-	WebSocket            ResolvedWebSocketConfig
-	ViewRefreshInterval  time.Duration
-	ReconfirmInterval    time.Duration
-	CleanupInterval      time.Duration
+	// RouteReconfirmRowsPerHour is the reconfirm sweep's pace; defaults to 81000.
+	RouteReconfirmRowsPerHour int
+	MaxConnsPerIP             int
+	MaxConnectsPerMinute      int
+	WSSendBytesPerSecond      int
+	WSSendBurstBytes          int
+	ViewRefreshInterval       time.Duration
+	ReconfirmInterval         time.Duration
+	CleanupInterval           time.Duration
 
 	PresenceFlushInterval time.Duration
 	PresencePacketTTL     time.Duration
@@ -55,8 +244,47 @@ type ResolvedConfig struct {
 
 	// NodeStaleThreshold and NodeDeleteAfter mirror ClockDriftThreshold's "0 means unset,
 	// resolve to a default" pattern -- see NodesConfig.
-	NodeStaleThreshold time.Duration
-	NodeDeleteAfter    time.Duration
+	NodeStaleThreshold  time.Duration
+	NodeDeleteAfter     time.Duration
+	ObserverDeleteAfter time.Duration
+
+	// APIPlanLayout selects the API pool layout; defaults to custom_all.
+	APIPlanLayout planpolicy.Layout
+	// GuardsEnforce lists the enforcing guard families; empty (never nil) when unset.
+	GuardsEnforce []string
+	// GuardsBudget is the per-client DB-time budget mode; always "shadow".
+	GuardsBudget string
+	// AdminListen is the admin listener address; empty disables it.
+	AdminListen string
+	// ReadOnly: no migrations, ingest, background jobs or boot writes; every database session is read-only.
+	ReadOnly bool
+	// PlanguardDailyCheck runs the daily read-only plan check; off by default.
+	PlanguardDailyCheck bool
+	// ReadModelCmiEnabled serves region and scope message pages from channel_message_iatas once trusted; false turns
+	// those pages off (503). Default true.
+	ReadModelCmiEnabled bool
+	// ReadModelPacketSitesEnabled serves region packet pages from packet_sites once trusted; false turns those pages
+	// off (503). Default true.
+	ReadModelPacketSitesEnabled bool
+	// FillDuty, FillMinPause, FillPacketSitesSlice and FillCmiBatch pace the one-off backfills; see FillConfig.
+	FillDuty             float64
+	FillMinPause         time.Duration
+	FillPacketSitesSlice int64
+	FillCmiBatch         int64
+}
+
+// RateLimitConfig controls the per-client REST API request budget.
+type RateLimitConfig struct {
+	Enabled           *bool `yaml:"enabled"` // Defaults to true; false disables both windows.
+	RequestsPerMinute int   `yaml:"requests_per_minute"`
+	Burst             int   `yaml:"burst"` // One-second window cap, not token-bucket capacity.
+}
+
+// ResolvedRateLimitConfig has defaults applied and no optional values.
+type ResolvedRateLimitConfig struct {
+	Enabled           bool
+	RequestsPerMinute int
+	Burst             int
 }
 
 // PresenceConfig controls coalescing of presence bookkeeping writes
@@ -78,7 +306,7 @@ type BackgroundConfig struct {
 	// Defaults to 1h if not set.
 	ViewRefresh duration `yaml:"view_refresh"`
 
-	// Reconfirm prunes stale and ambiguous resolved paths and neigbors.
+	// Reconfirm is the interval of route retention and neighbor cleanup.
 	Reconfirm duration `yaml:"reconfirm"`
 
 	// Cleanup is how often old telemetry and packet rows are pruned.
@@ -130,7 +358,7 @@ type CacheConfig struct {
 type CacheTTLsConfig struct {
 	// Stats controls the TTL for aggregated network statistics endpoints
 	// (overview, observations, payload breakdown, top nodes/observers, radio presets, scope stats).
-	// These are backed by materialized views refreshed hourly, so values under 1m are rarely useful.
+	// Rollup-backed keys also change with the rollup revision.
 	Stats duration `yaml:"stats"`
 
 	// Reference controls the TTL for mostly-static reference data
@@ -151,13 +379,14 @@ type CacheTTLsConfig struct {
 // Name can be provided with or without the # or $ prefix.
 // Beacon normalizes plain names by prepending #.
 type ScopeConfig struct {
-	Name string `yaml:"name"` // e.g. "bc", "#west", "$private"
+	Name   string `yaml:"name"`   // e.g. "bc", "#west", "$private"
+	Region string `yaml:"region"` // configured region slug; lists the scope under that region's IATAs
 }
 
 // TelemetryConfig controls observer telemetry storage behaviour.
 type TelemetryConfig struct {
 	// Retention is how long telemetry rows are kept before the cleanup job removes them.
-	// Defaults to 672h (4 weeks) if not set.
+	// Defaults to 744h (31 days) if not set.
 	Retention duration `yaml:"retention"`
 
 	// Resolution is how frequently a telemetry snapshot is stored per observer.
@@ -169,37 +398,41 @@ type TelemetryConfig struct {
 // WebSocketConfig controls WebSocket connection behaviour.
 // Settings here apply to the /ws endpoint only.
 type WebSocketConfig struct {
+	HandshakesPerMinute int      `yaml:"handshakes_per_minute"`
+	TrustedProxyCIDRs   []string `yaml:"trusted_proxy_cidrs"`
 	// MaxConnections is the process-wide concurrent WebSocket connection cap.
 	// Defaults to 1000 if not set.
 	MaxConnections int `yaml:"max_connections"`
 
 	// MaxConnectionsPerIP is the maximum number of concurrent WebSocket
-	// connections allowed from a single client IP. Defaults to 50 if not set.
+	// connections allowed from a single IP address (IPv6: per /64). Defaults to 5 if not set.
 	MaxConnectionsPerIP int `yaml:"max_connections_per_ip"`
-
-	// HandshakesPerMinute bounds upgrade attempts per client IP. Rejected
-	// attempts also count. Defaults to 5 if not set.
-	HandshakesPerMinute int `yaml:"handshakes_per_minute"`
-
-	// TrustedProxyCIDRs lists socket peers allowed to supply X-Forwarded-For or
-	// X-Real-IP. It is empty by default, so forwarding headers are ignored unless
-	// the operator explicitly defines the reverse proxy network(s).
-	TrustedProxyCIDRs []string `yaml:"trusted_proxy_cidrs"`
-}
-
-// ResolvedWebSocketConfig holds WebSocket limits with defaults applied.
-type ResolvedWebSocketConfig struct {
-	MaxConnections      int
-	MaxConnectionsPerIP int
-	HandshakesPerMinute int
-	TrustedProxyCIDRs   []string
+	// MaxConnectsPerMinute limits upgrade attempts, including failed handshakes.
+	// Zero/omitted defaults to 10; IPv6 addresses share a /64 attempt budget.
+	MaxConnectsPerMinute int `yaml:"max_connects_per_minute"`
+	// MaxSendBytesPerSecond caps each connection's live events, counted before compression.
+	// Zero/omitted defaults to 1048576 (1 MiB/s); events over it are dropped and noticed as lagged.
+	MaxSendBytesPerSecond int `yaml:"max_send_bytes_per_second"`
+	// SendBurstBytes is how far a connection may run ahead of that rate. Zero/omitted defaults to 8 MiB.
+	SendBurstBytes int `yaml:"send_burst_bytes"`
+	// AllowedOrigins are extra origins allowed to open /ws: exact, or scheme://*.domain[:port]
+	// for every subdomain of domain (never the apex). Defaults to same-host only.
+	AllowedOrigins []string `yaml:"allowed_origins"`
+	// RequireOrigin refuses an upgrade with no Origin unless it carries a /ws-ticket. It also
+	// raises the minimum app version to api.TicketAppVersion. Default false.
+	RequireOrigin bool `yaml:"require_origin"`
 }
 
 // PacketsConfig controls packet retention behaviour.
 type PacketsConfig struct {
-	// Retention is how long packet and observation rows are kept.
-	// Defaults to 720h (30 days) if not set.
+	// Retention covers packets, observations and channel messages. Defaults to 168h.
 	Retention duration `yaml:"retention"`
+}
+
+// AnalyticsConfig controls hourly rollup retention behaviour.
+type AnalyticsConfig struct {
+	// RollupRetention is how long hourly rollups are kept and the longest window /stats/series accepts. Defaults to 2160h (90 days).
+	RollupRetention duration `yaml:"rollup_retention"`
 }
 
 // RoutesConfig controls known-route retention behaviour.
@@ -213,10 +446,18 @@ type RoutesConfig struct {
 	// MinObservations is the observation count below which Grace applies
 	// instead of Retention. Defaults to 3 if not set.
 	MinObservations int `yaml:"min_observations"`
+	// ReconfirmRowsPerHour is how many routes the reconfirm sweep checks per
+	// hour for departed or now-ambiguous hops, in 5-minute slices. Defaults to
+	// 81000 if not set.
+	ReconfirmRowsPerHour int `yaml:"reconfirm_rows_per_hour"`
 }
 
 // NodesConfig controls node-derived signal thresholds.
 type NodesConfig struct {
+	// MarkForeign annotates repeaters outside the union of IATA borders, with
+	// imported MeshMapper boundaries replacing border files. Disabled by default;
+	// enabling it requires a border file or meshmapper.zones.
+	MarkForeign bool `yaml:"mark_foreign"`
 	// ClockDriftThreshold is the |device clock - server clock| magnitude, measured from a
 	// repeater/room server's ADVERT timestamp, above which the node API reports
 	// clockOutOfSync=true for that node. Defaults to 5m if not set.
@@ -225,8 +466,15 @@ type NodesConfig struct {
 	// stale=true for it. Defaults to 24h if not set.
 	StaleThreshold duration `yaml:"stale_threshold"`
 	// DeleteAfter is how long since a node's last_seen before the cleanup job deletes the
-	// node entirely. Defaults to the same 30-day default as packets.retention if not set --
-	// independently configurable from it, just the same starting point.
+	// node entirely. Defaults to 720h (30 days) if not set.
+	DeleteAfter duration `yaml:"delete_after"`
+}
+
+// ObserversConfig controls optional observer age-out.
+type ObserversConfig struct {
+	// DeleteAfter is how long an observer must be unseen before it can be deleted.
+	// Omitted or nonpositive disables age-out. Retained packet observations,
+	// telemetry and ownership records always protect the observer from deletion.
 	DeleteAfter duration `yaml:"delete_after"`
 }
 
@@ -254,9 +502,9 @@ func (d *duration) UnmarshalYAML(value *yaml.Node) error {
 // channel_hash = SHA256(secret)[0]. Explicit keys are provided as hex strings
 // keyed by the channel hash hex (e.g. "11" for 0x11).
 type ChannelKeysConfig struct {
-	// Hashtags is a list of hashtag names (without the # prefix).
+	// Hashtags lists hashtag names (without the # prefix), each optionally scoped to a region.
 	// Beacon derives the PSK and channel hash automatically.
-	Hashtags []string `yaml:"hashtags"`
+	Hashtags []HashtagConfig `yaml:"hashtags"`
 
 	// Keys maps channel hash hex → explicit key config.
 	Keys map[string]ExplicitKeyConfig `yaml:"keys"`
@@ -264,8 +512,9 @@ type ChannelKeysConfig struct {
 
 // ExplicitKeyConfig holds an explicit channel key and optional display name.
 type ExplicitKeyConfig struct {
-	Key  string `yaml:"key"`  // hex-encoded key bytes
-	Name string `yaml:"name"` // optional display name
+	Key    string `yaml:"key"`    // hex-encoded key bytes
+	Name   string `yaml:"name"`   // optional display name
+	Region string `yaml:"region"` // optional region slug; empty lists the channel Beacon-wide
 }
 
 // IATAConfig holds optional overrides for a known IATA code.
@@ -326,6 +575,11 @@ func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			cfg.MeshMapper.APIKey = strings.TrimSpace(os.Getenv("MESHMAPPER_API_KEY"))
+			cfg.Auth.APIKey = os.Getenv("BEACON_API_KEY")
+			if err := cfg.validateAPIKey(); err != nil {
+				return nil, err
+			}
 			return cfg, nil
 		}
 		return nil, err
@@ -333,34 +587,237 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, err
 	}
+	if value, set := os.LookupEnv("BEACON_API_KEY"); set {
+		cfg.Auth.APIKey = value
+	}
+	if value, set := os.LookupEnv("MESHMAPPER_API_KEY"); set {
+		cfg.MeshMapper.APIKey = value
+	}
+	cfg.MeshMapper.APIKey = strings.TrimSpace(cfg.MeshMapper.APIKey)
+	if err := cfg.validateAPIKey(); err != nil {
+		return nil, err
+	}
+	if err := cfg.validateDurations(); err != nil {
+		return nil, err
+	}
+	if len(cfg.Server.TrustedProxies) == 0 {
+		for _, raw := range cfg.WebSocket.TrustedProxyCIDRs {
+			prefix, err := netip.ParsePrefix(raw)
+			if err != nil {
+				return nil, fmt.Errorf("websocket.trusted_proxy_cidrs must contain valid CIDRs")
+			}
+			cfg.Server.TrustedProxies = append(cfg.Server.TrustedProxies, prefix)
+		}
+	}
+	for i, prefix := range cfg.Server.TrustedProxies {
+		if !prefix.IsValid() {
+			return nil, fmt.Errorf("server.trusted_proxies[%d] must be a valid CIDR", i)
+		}
+	}
+	if cfg.RateLimit.RequestsPerMinute < 0 || cfg.RateLimit.Burst < 0 {
+		return nil, fmt.Errorf("ratelimit.requests_per_minute and ratelimit.burst must be positive or zero for defaults")
+	}
+	if cfg.Routes.ReconfirmRowsPerHour < 0 {
+		return nil, fmt.Errorf("routes.reconfirm_rows_per_hour must be positive or zero for the default")
+	}
+	if cfg.WebSocket.MaxConnectsPerMinute < 0 {
+		return nil, fmt.Errorf("websocket.max_connects_per_minute must be positive or zero for the default")
+	}
+	if cfg.WebSocket.MaxSendBytesPerSecond < 0 || cfg.WebSocket.SendBurstBytes < 0 {
+		return nil, fmt.Errorf("websocket.max_send_bytes_per_second and websocket.send_burst_bytes must be positive or zero for defaults")
+	}
+	for i, origin := range cfg.WebSocket.AllowedOrigins {
+		if err := validateOrigin(origin); err != nil {
+			return nil, fmt.Errorf("websocket.allowed_origins[%d]: %w", i, err)
+		}
+	}
+	if d := cfg.Packets.Retention.Duration; d != 0 && d < 24*time.Hour {
+		return nil, fmt.Errorf("packets.retention must be at least 24h")
+	}
+	if d := cfg.Analytics.RollupRetention.Duration; d != 0 && d < 24*time.Hour {
+		return nil, fmt.Errorf("analytics.rollup_retention must be at least 24h")
+	}
 	configDir := filepath.Dir(path)
+	if err := cfg.validateMeshMapper(); err != nil {
+		return nil, err
+	}
+	if err := cfg.validateChannelKeys(); err != nil {
+		return nil, err
+	}
+	if err := cfg.validateScopes(); err != nil {
+		return nil, err
+	}
+	if err := cfg.validateClientVersions(); err != nil {
+		return nil, err
+	}
+	if cfg.Planguard.DailyCheck && cfg.Server.ReadOnly {
+		return nil, fmt.Errorf("planguard.daily_check cannot be enabled with server.read_only: a read-only server runs no background jobs")
+	}
+	if cfg.Nodes.MarkForeign && !cfg.MeshMapper.Zones.Enabled && !cfg.hasBorderFile() {
+		return nil, fmt.Errorf("nodes.mark_foreign requires an iatas.*.borderFile or meshmapper.zones")
+	}
 	for iata, details := range cfg.IATAs {
 		if details.BorderFile != "" && !filepath.IsAbs(details.BorderFile) {
 			details.BorderFile = filepath.Join(configDir, details.BorderFile)
 			cfg.IATAs[iata] = details
 		}
 	}
+	if err := cfg.validateDatabaseGuards(); err != nil {
+		return nil, err
+	}
+	if err := cfg.ReadModels.Fill.validate(); err != nil {
+		return nil, err
+	}
 	return cfg, nil
+}
+
+// canonicalFamilies returns the known families in names once each, in guardFamilies order; never nil.
+func canonicalFamilies(names []string) []string {
+	out := []string{}
+	for _, f := range guardFamilies {
+		if slices.Contains(names, f) {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// validateDatabaseGuards checks the plan layout, guard families, budget mode and admin listener address.
+func (c *Config) validateDatabaseGuards() error {
+	if _, err := planpolicy.ParseLayout(c.Database.APIPlanLayout); err != nil {
+		return err
+	}
+	for i, family := range c.Guards.Enforce {
+		if !slices.Contains(guardFamilies, family) {
+			return fmt.Errorf("guards.enforce[%d]: unknown family %q (%s)", i, family, strings.Join(guardFamilies, ", "))
+		}
+	}
+	if c.Guards.Budget != "" && c.Guards.Budget != "shadow" {
+		return fmt.Errorf("guards.budget must be shadow (budget enforcement is not available)")
+	}
+	if c.Server.AdminListen != "" {
+		_, port, err := net.SplitHostPort(c.Server.AdminListen)
+		if n, perr := strconv.Atoi(port); err != nil || perr != nil || n < 1 || n > 65535 {
+			return fmt.Errorf("server.admin_listen must be host:port, e.g. 127.0.0.1:9090")
+		}
+	}
+	return nil
+}
+
+// minAPIKeyLength keeps the admin key out of guessing range.
+const minAPIKeyLength = 16
+
+// validateAPIKey trims the key, since Bearer tokens can't carry whitespace; errors never echo it.
+func (c *Config) validateAPIKey() error {
+	c.Auth.APIKey = strings.TrimSpace(c.Auth.APIKey)
+	switch key := c.Auth.APIKey; {
+	case key == "":
+		return nil
+	case strings.IndexFunc(key, unicode.IsSpace) >= 0:
+		return fmt.Errorf("auth.api_key / BEACON_API_KEY must not contain whitespace")
+	case len(key) < minAPIKeyLength:
+		return fmt.Errorf("auth.api_key / BEACON_API_KEY must be at least %d characters", minAPIKeyLength)
+	}
+	return nil
+}
+
+var appVersionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
+
+// validateClientVersions keeps minimum client versions to plain X.Y.Z so every client can compare them.
+func (c *Config) validateClientVersions() error {
+	for _, f := range []struct {
+		key string
+		v   *string
+	}{{"mobile.min_app_version", &c.Mobile.MinAppVersion}, {"web.min_web_version", &c.Web.MinWebVersion}} {
+		*f.v = strings.TrimSpace(*f.v)
+		if *f.v != "" && !appVersionPattern.MatchString(*f.v) {
+			return fmt.Errorf("%s must be X.Y.Z (digits only), got %q", f.key, *f.v)
+		}
+	}
+	return nil
+}
+
+// validateDurations rejects negative intervals, which would otherwise panic tickers or invert cutoffs.
+// observers.delete_after is exempt: nonpositive disables it.
+func (c *Config) validateDurations() error {
+	for _, d := range []struct {
+		key   string
+		value duration
+	}{
+		{"presence.flush_interval", c.Presence.FlushInterval},
+		{"presence.packet_ttl", c.Presence.PacketTTL},
+		{"background.view_refresh", c.Background.ViewRefresh},
+		{"background.reconfirm", c.Background.Reconfirm},
+		{"background.cleanup", c.Background.Cleanup},
+		{"cache.ttl", c.Cache.TTL},
+		{"cache.ttls.stats", c.Cache.TTLs.Stats},
+		{"cache.ttls.reference", c.Cache.TTLs.Reference},
+		{"cache.ttls.nodes", c.Cache.TTLs.Nodes},
+		{"cache.ttls.observers", c.Cache.TTLs.Observers},
+		{"telemetry.retention", c.Telemetry.Retention},
+		{"telemetry.resolution", c.Telemetry.Resolution},
+		{"routes.retention", c.Routes.Retention},
+		{"routes.grace", c.Routes.Grace},
+		{"nodes.clock_drift_threshold", c.Nodes.ClockDriftThreshold},
+		{"nodes.stale_threshold", c.Nodes.StaleThreshold},
+		{"nodes.delete_after", c.Nodes.DeleteAfter},
+		{"meshmapper.scopes.refresh_interval", c.MeshMapper.Scopes.RefreshInterval},
+		{"meshmapper.zones.refresh_interval", c.MeshMapper.Zones.RefreshInterval},
+		{"meshmapper.channels.refresh_interval", c.MeshMapper.Channels.RefreshInterval},
+	} {
+		if d.value.Duration < 0 {
+			return fmt.Errorf("%s must not be negative (omit it or use 0 for the default)", d.key)
+		}
+	}
+	return nil
+}
+
+// validateOrigin allows exact origins or a leading "*." subdomain wildcard; the WebSocket
+// library treats entries as path.Match patterns, so every other pattern character is rejected.
+func validateOrigin(origin string) error {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return fmt.Errorf("invalid origin %q: %w", origin, err)
+	}
+	host := u.Hostname()
+	// At least two labels after the wildcard, so it never spans a whole TLD.
+	if rest, ok := strings.CutPrefix(host, "*."); ok {
+		if labels := strings.Split(rest, "."); len(labels) >= 2 && !slices.Contains(labels, "") {
+			host = rest
+		}
+	}
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil ||
+		u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" ||
+		strings.Contains(host, "*") || strings.ContainsAny(origin, `?[]\`) {
+		return fmt.Errorf("origin %q must be scheme://host[:port] or scheme://*.domain[:port] with an http or https scheme", origin)
+	}
+	return nil
 }
 
 // Resolve returns a ResolvedConfig with defaults applied for any zero values.
 func Resolve(cfg *Config) ResolvedConfig {
 	r := ResolvedConfig{
-		TelemetryResolution:  cfg.Telemetry.Resolution.Duration,
-		TelemetryRetention:   cfg.Telemetry.Retention.Duration,
-		PacketRetention:      cfg.Packets.Retention.Duration,
-		RouteRetention:       cfg.Routes.Retention.Duration,
-		RouteGrace:           cfg.Routes.Grace.Duration,
-		RouteMinObservations: cfg.Routes.MinObservations,
-		WebSocket: ResolvedWebSocketConfig{
-			MaxConnections:      cfg.WebSocket.MaxConnections,
-			MaxConnectionsPerIP: cfg.WebSocket.MaxConnectionsPerIP,
-			HandshakesPerMinute: cfg.WebSocket.HandshakesPerMinute,
-			TrustedProxyCIDRs:   append([]string(nil), cfg.WebSocket.TrustedProxyCIDRs...),
+		RateLimit: ResolvedRateLimitConfig{
+			Enabled:           cfg.RateLimit.Enabled == nil || *cfg.RateLimit.Enabled,
+			RequestsPerMinute: cfg.RateLimit.RequestsPerMinute,
+			Burst:             cfg.RateLimit.Burst,
 		},
-		ViewRefreshInterval: cfg.Background.ViewRefresh.Duration,
-		ReconfirmInterval:   cfg.Background.Reconfirm.Duration,
-		CleanupInterval:     cfg.Background.Cleanup.Duration,
+		TelemetryResolution:       cfg.Telemetry.Resolution.Duration,
+		TelemetryRetention:        cfg.Telemetry.Retention.Duration,
+		RollupRetention:           cfg.Analytics.RollupRetention.Duration,
+		PacketRetention:           cfg.Packets.Retention.Duration,
+		RouteRetention:            cfg.Routes.Retention.Duration,
+		RouteGrace:                cfg.Routes.Grace.Duration,
+		RouteMinObservations:      cfg.Routes.MinObservations,
+		RouteReconfirmRowsPerHour: cfg.Routes.ReconfirmRowsPerHour,
+		WebSocket:                 ResolvedWebSocketConfig{MaxConnections: cfg.WebSocket.MaxConnections, MaxConnectionsPerIP: cfg.WebSocket.MaxConnectionsPerIP, HandshakesPerMinute: cfg.WebSocket.HandshakesPerMinute, TrustedProxyCIDRs: append([]string(nil), cfg.WebSocket.TrustedProxyCIDRs...)},
+		MaxConnsPerIP:             cfg.WebSocket.MaxConnectionsPerIP,
+		MaxConnectsPerMinute:      cfg.WebSocket.MaxConnectsPerMinute,
+		WSSendBytesPerSecond:      cfg.WebSocket.MaxSendBytesPerSecond,
+		WSSendBurstBytes:          cfg.WebSocket.SendBurstBytes,
+		ViewRefreshInterval:       cfg.Background.ViewRefresh.Duration,
+		ReconfirmInterval:         cfg.Background.Reconfirm.Duration,
+		CleanupInterval:           cfg.Background.Cleanup.Duration,
 
 		PresenceFlushInterval: cfg.Presence.FlushInterval.Duration,
 		PresencePacketTTL:     cfg.Presence.PacketTTL.Duration,
@@ -368,15 +825,42 @@ func Resolve(cfg *Config) ResolvedConfig {
 		ClockDriftThreshold: cfg.Nodes.ClockDriftThreshold.Duration,
 		NodeStaleThreshold:  cfg.Nodes.StaleThreshold.Duration,
 		NodeDeleteAfter:     cfg.Nodes.DeleteAfter.Duration,
+		ObserverDeleteAfter: cfg.Observers.DeleteAfter.Duration,
+
+		GuardsEnforce: canonicalFamilies(cfg.Guards.Enforce),
+		GuardsBudget:  cfg.Guards.Budget,
+		AdminListen:   cfg.Server.AdminListen,
+		ReadOnly:      cfg.Server.ReadOnly,
+
+		PlanguardDailyCheck:         cfg.Planguard.DailyCheck,
+		ReadModelCmiEnabled:         cfg.ReadModels.Cmi.Enabled == nil || *cfg.ReadModels.Cmi.Enabled,
+		ReadModelPacketSitesEnabled: cfg.ReadModels.PacketSites.Enabled == nil || *cfg.ReadModels.PacketSites.Enabled,
+	}
+	// Load has validated the layout; an unvalidated config falls back to the default.
+	r.APIPlanLayout, _ = planpolicy.ParseLayout(cfg.Database.APIPlanLayout)
+	if r.APIPlanLayout == "" {
+		r.APIPlanLayout = planpolicy.CustomAll
+	}
+	if r.GuardsBudget == "" {
+		r.GuardsBudget = "shadow"
+	}
+	if r.RateLimit.RequestsPerMinute == 0 {
+		r.RateLimit.RequestsPerMinute = 600
+	}
+	if r.RateLimit.Burst == 0 {
+		r.RateLimit.Burst = r.RateLimit.RequestsPerMinute
 	}
 	if r.TelemetryResolution == 0 {
 		r.TelemetryResolution = time.Hour
 	}
 	if r.TelemetryRetention == 0 {
-		r.TelemetryRetention = 28 * 24 * time.Hour
+		r.TelemetryRetention = 31 * 24 * time.Hour
+	}
+	if r.RollupRetention == 0 {
+		r.RollupRetention = 90 * 24 * time.Hour
 	}
 	if r.PacketRetention == 0 {
-		r.PacketRetention = 30 * 24 * time.Hour
+		r.PacketRetention = 7 * 24 * time.Hour
 	}
 	if r.RouteRetention == 0 {
 		r.RouteRetention = 14 * 24 * time.Hour
@@ -387,6 +871,9 @@ func Resolve(cfg *Config) ResolvedConfig {
 	if r.RouteMinObservations == 0 {
 		r.RouteMinObservations = 3
 	}
+	if r.RouteReconfirmRowsPerHour == 0 {
+		r.RouteReconfirmRowsPerHour = 81000
+	}
 	if r.WebSocket.MaxConnections <= 0 {
 		r.WebSocket.MaxConnections = 1000
 	}
@@ -395,6 +882,21 @@ func Resolve(cfg *Config) ResolvedConfig {
 	}
 	if r.WebSocket.HandshakesPerMinute <= 0 {
 		r.WebSocket.HandshakesPerMinute = 5
+	}
+	if cfg.WebSocket.HandshakesPerMinute > 0 && cfg.WebSocket.MaxConnectsPerMinute == 0 {
+		r.MaxConnectsPerMinute = cfg.WebSocket.HandshakesPerMinute
+	}
+	if r.MaxConnsPerIP == 0 {
+		r.MaxConnsPerIP = 5
+	}
+	if r.MaxConnectsPerMinute == 0 {
+		r.MaxConnectsPerMinute = 10
+	}
+	if r.WSSendBytesPerSecond == 0 {
+		r.WSSendBytesPerSecond = 1 << 20
+	}
+	if r.WSSendBurstBytes == 0 {
+		r.WSSendBurstBytes = 8 << 20
 	}
 	if r.ViewRefreshInterval == 0 {
 		r.ViewRefreshInterval = time.Hour
@@ -418,20 +920,38 @@ func Resolve(cfg *Config) ResolvedConfig {
 		r.NodeStaleThreshold = 24 * time.Hour
 	}
 	if r.NodeDeleteAfter == 0 {
-		// Same default as packets.retention (30 days) -- independently configurable, just
-		// the same starting point, not tied to whatever PacketRetention resolves to.
 		r.NodeDeleteAfter = 30 * 24 * time.Hour
+	}
+	// Load has validated the fill values; an unvalidated config falls back to the defaults.
+	fill := cfg.ReadModels.Fill
+	r.FillDuty, r.FillMinPause = defaultFillDuty, defaultFillMinPause
+	r.FillPacketSitesSlice, r.FillCmiBatch = defaultFillPacketSitesSlice, defaultFillCmiBatch
+	if fill.validate() == nil {
+		if fill.Duty != nil {
+			r.FillDuty = *fill.Duty
+		}
+		if fill.MinPause != nil {
+			r.FillMinPause = fill.MinPause.Duration
+		}
+		if fill.PacketSitesSlice != nil {
+			r.FillPacketSitesSlice = *fill.PacketSitesSlice
+		}
+		if fill.CmiBatch != nil {
+			r.FillCmiBatch = *fill.CmiBatch
+		}
 	}
 	return r
 }
 
 func (r ResolvedConfig) String() string {
-	return fmt.Sprintf(
-		"telemetryResolution=%s telemetryRetention=%s packetRetention=%s routeRetention=%s routeGrace=%s routeMinObs=%d wsMaxConnections=%d wsMaxConnsPerIP=%d wsHandshakesPerMinute=%d wsTrustedProxyCIDRs=%d viewRefresh=%s reconfirm=%s cleanup=%s presenceFlush=%s presencePacketTTL=%s clockDriftThreshold=%s nodeStaleThreshold=%s nodeDeleteAfter=%s",
-		r.TelemetryResolution, r.TelemetryRetention, r.PacketRetention, r.RouteRetention, r.RouteGrace, r.RouteMinObservations,
-		r.WebSocket.MaxConnections, r.WebSocket.MaxConnectionsPerIP, r.WebSocket.HandshakesPerMinute, len(r.WebSocket.TrustedProxyCIDRs),
-		r.ViewRefreshInterval, r.ReconfirmInterval, r.CleanupInterval,
+	return fmt.Sprintf("wsMaxConnsPerIP=%d ", r.WebSocket.MaxConnectionsPerIP) + fmt.Sprintf(
+		"telemetryResolution=%s telemetryRetention=%s rollupRetention=%s packetRetention=%s routeRetention=%s routeGrace=%s routeMinObs=%d routeReconfirmRowsPerHour=%d maxConnsPerIP=%d maxConnectsPerMinute=%d wsSendBytesPerSecond=%d wsSendBurstBytes=%d viewRefresh=%s reconfirm=%s cleanup=%s presenceFlush=%s presencePacketTTL=%s clockDriftThreshold=%s nodeStaleThreshold=%s nodeDeleteAfter=%s observerDeleteAfter=%s rateLimitEnabled=%t requestsPerMinute=%d burst=%d apiPlanLayout=%s guardsEnforce=%v guardsBudget=%s adminListen=%q readOnly=%t planguardDailyCheck=%t readModelCmi=%t readModelPacketSites=%t fillDuty=%g fillMinPause=%s fillPacketSitesSlice=%d fillCmiBatch=%d",
+		r.TelemetryResolution, r.TelemetryRetention, r.RollupRetention, r.PacketRetention, r.RouteRetention, r.RouteGrace, r.RouteMinObservations, r.RouteReconfirmRowsPerHour,
+		r.MaxConnsPerIP, r.MaxConnectsPerMinute, r.WSSendBytesPerSecond, r.WSSendBurstBytes, r.ViewRefreshInterval, r.ReconfirmInterval, r.CleanupInterval,
 		r.PresenceFlushInterval, r.PresencePacketTTL, r.ClockDriftThreshold,
-		r.NodeStaleThreshold, r.NodeDeleteAfter,
+		r.NodeStaleThreshold, r.NodeDeleteAfter, r.ObserverDeleteAfter,
+		r.RateLimit.Enabled, r.RateLimit.RequestsPerMinute, r.RateLimit.Burst,
+		r.APIPlanLayout, r.GuardsEnforce, r.GuardsBudget, r.AdminListen, r.ReadOnly, r.PlanguardDailyCheck, r.ReadModelCmiEnabled, r.ReadModelPacketSitesEnabled,
+		r.FillDuty, r.FillMinPause, r.FillPacketSitesSlice, r.FillCmiBatch,
 	)
 }

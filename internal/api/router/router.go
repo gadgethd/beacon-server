@@ -3,8 +3,7 @@
 
 // Package router wires all HTTP routes onto the Chi router and injects
 // dependencies (hub, reader, ingest workers) into the handler closures.
-// All routes are mounted under /api/v1 with public and private groups
-// stubbed for future auth middleware.
+// REST routes are mounted under /api/v1; its admin subtree requires a bearer key.
 package router
 
 import (
@@ -12,15 +11,15 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/go-chi/cors"
 
 	"github.com/MeshCore-Beacon/beacon-server/internal/api"
 	"github.com/MeshCore-Beacon/beacon-server/internal/api/handlers"
 	mw "github.com/MeshCore-Beacon/beacon-server/internal/api/middleware"
-	"github.com/MeshCore-Beacon/beacon-server/internal/config"
+	"github.com/MeshCore-Beacon/beacon-server/internal/guards"
 	"github.com/MeshCore-Beacon/beacon-server/internal/hub"
 	"github.com/MeshCore-Beacon/beacon-server/internal/ingest"
 	"github.com/MeshCore-Beacon/beacon-server/internal/ws"
+	"github.com/MeshCore-Beacon/beacon-server/internal/wsticket"
 	httpSwagger "github.com/swaggo/http-swagger"
 )
 
@@ -30,6 +29,8 @@ import (
 //
 //	/ws                → WebSocket (public in v1)
 //	/api/v1/           → public group
+//	  /info            → server info and minimum client versions
+//	  /ws-ticket       → ticket that opens /ws without an Origin
 //	  /packets         → packets subrouter
 //	  /nodes           → nodes subrouter
 //	  /brokers         → brokers subrouter
@@ -39,39 +40,61 @@ import (
 //	  /regions         → regions subrouter
 //	  /stats           → stats subrouter
 //
-// The private group is stubbed and ready for the auth middleware drop-in
-// described in Future Features → Admin authentication.
-func New(h *hub.Hub, reader api.Reader, workers []*ingest.Worker, wsCfg config.ResolvedWebSocketConfig, corsCfg config.CORSConfig) http.Handler {
+// Admin endpoints require a configured bearer key.
+func New(h *hub.Hub, reader api.Reader, workers []*ingest.Worker, opts Options) http.Handler {
 	r := chi.NewRouter()
 
 	// ── CORS ─────────────────────────────────────────────────────────────────
-	allowedOrigins := corsCfg.AllowedOrigins
+	allowedOrigins := opts.CORS.AllowedOrigins
 	if len(allowedOrigins) == 0 {
 		allowedOrigins = []string{"*"}
 	}
-	allowedMethods := corsCfg.AllowedMethods
+	allowedMethods := opts.CORS.AllowedMethods
 	if len(allowedMethods) == 0 {
 		allowedMethods = []string{"GET", "HEAD", "OPTIONS"}
 	}
-	allowedHeaders := corsCfg.AllowedHeaders
+	allowedHeaders := opts.CORS.AllowedHeaders
 	if len(allowedHeaders) == 0 {
 		allowedHeaders = []string{"Accept", "Authorization", "Content-Type"}
 	}
-	maxAge := corsCfg.MaxAge
+	maxAge := opts.CORS.MaxAge
 	if maxAge == 0 {
 		maxAge = 300
 	}
-	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   allowedOrigins,
-		AllowedMethods:   allowedMethods,
-		AllowedHeaders:   allowedHeaders,
-		AllowCredentials: corsCfg.AllowCredentials,
-		MaxAge:           maxAge,
-	}))
+	// Capture only values used by this router. Do not retain Config, credentials
+	// or caller-owned slices in the admin response.
+	adminConfig := api.AdminConfig{
+		Auth: api.AdminAuthConfig{Configured: opts.Auth.APIKey != ""},
+		CORS: api.AdminCORSConfig{
+			AllowedOrigins:   append([]string{}, allowedOrigins...),
+			AllowedMethods:   append([]string{}, allowedMethods...),
+			AllowedHeaders:   append([]string{}, allowedHeaders...),
+			AllowCredentials: opts.CORS.AllowCredentials,
+			MaxAge:           maxAge,
+		},
+		Ingest: api.AdminIngestConfig{BrokerCount: len(workers)},
+		Mobile: api.AdminMobileConfig{MinAppVersion: opts.MinAppVersion},
+		Web:    api.AdminWebConfig{MinWebVersion: opts.MinWebVersion},
+	}
+	info := api.Info{ServerVersion: opts.ServerVersion}
+	if opts.MinAppVersion != "" {
+		info.MinAppVersion = &opts.MinAppVersion
+	}
+	if opts.MinWebVersion != "" {
+		info.MinWebVersion = &opts.MinWebVersion
+	}
+	runtimeConfig := mw.NewRuntimeConfig(adminConfig, []string{"Retry-After"})
+	if opts.Guards != nil {
+		runtimeConfig.BindGuards(opts.Guards, api.AdminGuardsConfig{
+			ObserveOnly: opts.Guards.ForceObserve(), Budget: "shadow", APIPlanLayout: opts.APIPlanLayout,
+		})
+	}
+	r.Use(runtimeConfig.CORS)
 
 	// ── Global middleware ────────────────────────────────────────────────────
 	r.Use(middleware.RequestID)
-	r.Use(middleware.Logger)
+	r.Use(mw.TrustedProxyIP(opts.Server.TrustedProxies))
+	r.Use(mw.RequestLogger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.CleanPath)
 	r.Use(middleware.StripSlashes)
@@ -86,19 +109,27 @@ func New(h *hub.Hub, reader api.Reader, workers []*ingest.Worker, wsCfg config.R
 	))
 
 	// ── WebSocket ────────────────────────────────────────────────────────────
-	wsHandler := ws.NewHandler(h, reader, ws.Options{
-		MaxConnections:      wsCfg.MaxConnections,
-		MaxConnectionsPerIP: wsCfg.MaxConnectionsPerIP,
-		HandshakesPerMinute: wsCfg.HandshakesPerMinute,
-		TrustedProxyCIDRs:   wsCfg.TrustedProxyCIDRs,
-	})
+	tickets := wsticket.New()
+	wsHandler := ws.NewTransport(h, reader, ws.Limits{
+		MaxConnections:       opts.WSMaxConnections,
+		MaxConnsPerIP:        opts.MaxConnsPerIP,
+		MaxConnectsPerMinute: opts.MaxConnectsPerMinute,
+		SendBytesPerSecond:   opts.WSSendBytesPerSecond,
+		SendBurstBytes:       opts.WSSendBurstBytes,
+	}, ws.Access{AllowedOrigins: opts.WSAllowedOrigins, RequireOrigin: opts.WSRequireOrigin, Tickets: tickets})
 	r.Get("/ws", wsHandler.ServeHTTP)
 	r.Get("/metrics", wsHandler.ServeMetrics)
 
 	// ── Public REST API (v1) ─────────────────────────────────────────────────
 	r.Route("/api/v1", func(r chi.Router) {
-		// Public group — no authentication required (all of v1 is public).
+		r.Use(mw.RateLimit(opts.RateLimit))
+		r.Use(mw.LimitListParams)
+		// Public group — no authentication required. Guards run here only, after TrustedProxyIP,
+		// so /ws and the admin subtree never carry guard state.
 		r.Group(func(r chi.Router) {
+			if opts.Guards != nil {
+				r.Use(guards.Middleware(opts.Guards))
+			}
 			r.Mount("/packets", handlers.PacketsRouter(reader))
 			r.Mount("/nodes", handlers.NodesRouter(reader))
 			r.Mount("/brokers", handlers.BrokersRouter(workers))
@@ -108,18 +139,15 @@ func New(h *hub.Hub, reader api.Reader, workers []*ingest.Worker, wsCfg config.R
 			r.Mount("/iatas", handlers.IATAsRouter(reader))
 			r.Mount("/regions", handlers.RegionsRouter(reader))
 			r.Mount("/routes", handlers.RoutesRouter(reader))
-			r.Mount("/scopes", handlers.ScopesRouter(reader))
-			r.Mount("/stats", handlers.StatsRouter(reader))
+			r.Mount("/scopes", handlers.ScopesRouter(reader, opts.Scopes))
+			r.Mount("/stats", handlers.StatsRouter(reader, handlers.StatsOptions{Scopes: opts.Scopes, SeriesWindow: opts.RollupRetention}))
 			r.Mount("/traces", handlers.TracesRouter(reader))
+			r.Mount("/info", handlers.InfoRouter(info))
+			r.Mount("/ws-ticket", handlers.WSTicketRouter(tickets))
 		})
 
-		// Private group — auth middleware applied.
-		// Stubbed for the admin endpoints described in Future Features.
-		// Swap mw.NoopAuth for a real JWT/session middleware when ready.
-		r.Group(func(r chi.Router) {
-			r.Use(mw.NoopAuth)
-			// r.Mount("/admin", handlers.AdminRouter())
-		})
+		// Protect the entire subtree, including its root and unknown paths.
+		r.Mount("/admin", mw.BearerAuth(opts.Auth.APIKey, handlers.AdminRouter(runtimeConfig, opts.AdminRoutes)))
 	})
 
 	return r

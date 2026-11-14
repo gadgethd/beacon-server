@@ -40,6 +40,11 @@ behavior. Pool sizes and session settings are unchanged.
 
 Provision privileges before application startup:
 
+The optional UKMesh local-development profile keeps its explicit relation grants
+and derived-object ownership policy in `deploy/ukmesh-dev/access.sql`. Its calling
+launcher must verify the local database/container ownership before running it.
+This fixture bootstrap is separate from Beacon's default deployment behavior.
+
 - Runtime and maintenance need `SELECT` on `schema_migrations` and
   `schema_migration_integrity`, with no writes to either metadata table.
 - Preserve application DML for config seeding, ingestion, reconciliation,

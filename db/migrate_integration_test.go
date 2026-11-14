@@ -40,21 +40,21 @@ func TestApplyAndRecordIsAtomicPostgres(t *testing.T) {
 INSERT INTO schema_migrations (filename) VALUES ('900_dup.sql')`); err != nil {
 		t.Fatal(err)
 	}
-	if err := applyAndRecord(ctx, pool, "900_dup.sql", "CREATE TABLE atomic_probe (v INT); -- trailing comment"); err == nil {
+	if err := applyAndRecord(ctx, pool, "900_dup.sql", "CREATE TABLE atomic_probe (v INT); -- trailing comment", false); err == nil {
 		t.Fatal("duplicate ledger row should fail")
 	}
 	var exists bool
 	if err := pool.QueryRow(ctx, "SELECT to_regclass('atomic_probe') IS NOT NULL").Scan(&exists); err != nil || exists {
 		t.Errorf("migration survived its failed ledger insert: %v %v", exists, err)
 	}
-	if err := applyAndRecord(ctx, pool, "901_it's.sql", "CREATE TABLE atomic_probe (v INT)"); err != nil {
+	if err := applyAndRecord(ctx, pool, "901_it's.sql", "CREATE TABLE atomic_probe (v INT)", false); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE filename = '901_it''s.sql') AND to_regclass('atomic_probe') IS NOT NULL").Scan(&exists); err != nil || !exists {
 		t.Errorf("migration and ledger row not both recorded: %v %v", exists, err)
 	}
 	// CONCURRENTLY can't share a transaction; it still applies and records.
-	if err := applyAndRecord(ctx, pool, "902_idx.sql", "CREATE INDEX CONCURRENTLY atomic_probe_idx ON atomic_probe (v)"); err != nil {
+	if err := applyAndRecord(ctx, pool, "902_idx.sql", "CREATE INDEX CONCURRENTLY atomic_probe_idx ON atomic_probe (v)", false); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE filename = '902_idx.sql') AND to_regclass('atomic_probe_idx') IS NOT NULL").Scan(&exists); err != nil || !exists {

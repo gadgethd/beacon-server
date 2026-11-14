@@ -94,7 +94,26 @@ var version = "dev"
 // @tag.name			Info
 // @tag.description	Server info for the BEACON Mobile app
 func main() {
+	runWithArgs(os.Args[1:])
+}
+
+func runWithArgs(args []string) {
 	_ = godotenv.Load()
+	databaseMode, err := parseDatabaseMode(args, os.Getenv("BEACON_EXTERNAL_MIGRATIONS"))
+	if err != nil {
+		slog.Error("invalid database startup mode", "component", "startup", "error", err)
+		os.Exit(1)
+	}
+	if databaseMode.migrateOnly {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		if err := runMigrationOnly(ctx, getEnv("POSTGRES_DSN"), databaseMode.attest); err != nil {
+			slog.Error("migration job failed", "component", "startup", "error", err)
+			os.Exit(1)
+		}
+		slog.Info("migration job complete", "component", "startup", "attested", databaseMode.attest)
+		return
+	}
 	addr := os.Getenv("LISTEN_ADDR")
 	if addr == "" {
 		addr = ":8080"
@@ -146,6 +165,10 @@ func main() {
 	defer cancel()
 
 	dsn := getEnv("POSTGRES_DSN")
+	if databaseMode.external && dsn == "" {
+		slog.Error("POSTGRES_DSN is required for external migration verification", "component", "startup")
+		os.Exit(1)
+	}
 	layout := resolved.APIPlanLayout
 	mode := bootModeFor(resolved.ReadOnly)
 	var tune []func(string, *pgxpool.Config)
@@ -153,7 +176,9 @@ func main() {
 		slog.Warn(readOnlyWarning, "component", "startup")
 		tune = append(tune, readOnlyTune)
 	}
-	pools, err := db.OpenPools(ctx, dsn, layout, tune...)
+	pools, err := db.OpenPoolsWithCredentials(ctx, db.PoolCredentials{
+		Runtime: dsn, Maintenance: os.Getenv("BEACON_MAINTENANCE_DSN"),
+	}, layout, tune...)
 	if err != nil {
 		// Parse errors can embed the complete DSN, including its password.
 		slog.Error("invalid PostgreSQL connection configuration; check POSTGRES_DSN", "component", "startup")
@@ -163,7 +188,12 @@ func main() {
 	slog.Info("database pools open", "component", "startup", "layout", layout, "connections", pools.Total())
 	backupOpts := configureBackup(ctx, cfg, pools.Maint, dsn, configPath)
 
-	if mode.Migrate {
+	if databaseMode.external {
+		if err := db.VerifyMigrations(ctx, pools.Maint); err != nil {
+			slog.Error("external migration verification failed", "component", "startup", "error", err)
+			os.Exit(1)
+		}
+	} else if mode.Migrate {
 		if err := db.RunMigrations(ctx, pools.Maint); err != nil {
 			slog.Error("migrations failed", "component", "startup", "error", err)
 			os.Exit(1)

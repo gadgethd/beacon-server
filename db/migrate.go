@@ -84,10 +84,10 @@ func watchBlockers(ctx context.Context, q execQuerier, pid int32) (stop func() s
 // applyWithLockRetry applies a migration on conn, retrying lock timeouts after each backoff.
 // Retrying is safe: transactional files roll back whole, a CIC cut short leaves an invalid
 // index that applyMigration drops and rebuilds, and DROP ... IF EXISTS finishes a cancelled DIC.
-func applyWithLockRetry(ctx context.Context, conn, watch execQuerier, pid int32, name, sql string) error {
+func applyWithLockRetry(ctx context.Context, conn, watch execQuerier, pid int32, name, sql string, recordIntegrity bool) error {
 	for attempt := 1; ; attempt++ {
 		stop := watchBlockers(ctx, watch, pid)
-		err := applyAndRecord(ctx, conn, name, sql)
+		err := applyAndRecord(ctx, conn, name, sql, recordIntegrity)
 		blockers := stop()
 		if !isLockTimeout(err) {
 			return err
@@ -154,8 +154,12 @@ func applyMigration(ctx context.Context, db execQuerier, sql string) error {
 
 // applyAndRecord applies a migration and its ledger row. Without CONCURRENTLY both go in
 // one simple-protocol Exec, an implicit transaction, so a crash can't apply one without the other.
-func applyAndRecord(ctx context.Context, db execQuerier, name, sql string) error {
+func applyAndRecord(ctx context.Context, db execQuerier, name, sql string, recordIntegrity bool) error {
 	record := "INSERT INTO schema_migrations (filename) VALUES ('" + strings.ReplaceAll(name, "'", "''") + "')"
+	if recordIntegrity {
+		record += "; INSERT INTO schema_migration_integrity(filename,checksum_sha256) VALUES ('" +
+			strings.ReplaceAll(name, "'", "''") + "','" + migrationChecksum(sql) + "')"
+	}
 	if !nonTransactionalRe.MatchString(lineCommentRe.ReplaceAllString(sql, "")) {
 		_, err := db.Exec(ctx, sql+"\n;\n"+record)
 		return err
@@ -190,6 +194,12 @@ func checkBaseline(ctx context.Context, db execQuerier) error {
 }
 
 func RunMigrations(ctx context.Context, pool *pgxpool.Pool) error {
+	return withMigrationLock(ctx, pool, func(conn *pgxpool.Conn) error {
+		return runMigrations(ctx, conn, pool, false)
+	})
+}
+
+func withMigrationLock(ctx context.Context, pool *pgxpool.Pool, work func(*pgxpool.Conn) error) error {
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to acquire migration connection: %w", err)
@@ -222,10 +232,10 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	if _, err := conn.Exec(ctx, fmt.Sprintf("SET lock_timeout = %d", migrationLockTimeout.Milliseconds())); err != nil {
 		return fmt.Errorf("failed to set migration lock_timeout: %w", err)
 	}
-	return runMigrations(ctx, conn, pool)
+	return work(conn)
 }
 
-func runMigrations(ctx context.Context, pool, watch execQuerier) error {
+func prepareMigrationLedger(ctx context.Context, pool execQuerier) error {
 	_, err := pool.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			filename TEXT PRIMARY KEY,
@@ -236,7 +246,11 @@ func runMigrations(ctx context.Context, pool, watch execQuerier) error {
 		return fmt.Errorf("failed to create schema_migrations: %w", err)
 	}
 
-	if err := checkBaseline(ctx, pool); err != nil {
+	return checkBaseline(ctx, pool)
+}
+
+func runMigrations(ctx context.Context, pool, watch execQuerier, recordIntegrity bool) error {
+	if err := prepareMigrationLedger(ctx, pool); err != nil {
 		return err
 	}
 
@@ -276,7 +290,7 @@ func runMigrations(ctx context.Context, pool, watch execQuerier) error {
 			return fmt.Errorf("failed to read migration %s: %w", entry.Name(), err)
 		}
 
-		if err := applyWithLockRetry(ctx, pool, watch, pid, entry.Name(), string(sql)); err != nil {
+		if err := applyWithLockRetry(ctx, pool, watch, pid, entry.Name(), string(sql), recordIntegrity); err != nil {
 			return fmt.Errorf("failed to apply migration %s: %w", entry.Name(), err)
 		}
 

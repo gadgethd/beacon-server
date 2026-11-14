@@ -148,7 +148,7 @@ func TestRunMigrationsLockRetryRebuildsIndexPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	start := time.Now()
-	if err := applyWithLockRetry(ctx, conn, pool, pid, "905_probe.sql", "CREATE INDEX CONCURRENTLY probe_idx ON probe (v)"); err != nil {
+	if err := applyWithLockRetry(ctx, conn, pool, pid, "905_probe.sql", "CREATE INDEX CONCURRENTLY probe_idx ON probe (v)", false); err != nil {
 		t.Fatal(err)
 	}
 	if waited := time.Since(start); waited < 1500*time.Millisecond {

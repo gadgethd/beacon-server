@@ -31,7 +31,7 @@ func TestProxyLimitWarning(t *testing.T) {
 
 func TestStartupLogging(t *testing.T) {
 	if os.Getenv("BEACON_TEST_LOG_STARTUP") == "1" {
-		main()
+		runWithArgs(nil)
 		return
 	}
 	for _, level := range []string{"debug", "info", "warn", "error"} {
@@ -53,6 +53,7 @@ func TestStartupLogging(t *testing.T) {
 				t.Fatal("DSN credential leaked")
 			}
 			foundError := false
+			foundDSNFailure := false
 			for _, line := range bytes.Split(bytes.TrimSpace(out), []byte("\n")) {
 				var record map[string]any
 				if err := json.Unmarshal(line, &record); err != nil {
@@ -60,6 +61,9 @@ func TestStartupLogging(t *testing.T) {
 				}
 				if record["level"] == "ERROR" {
 					foundError = true
+					if record["msg"] == "invalid PostgreSQL connection configuration; check POSTGRES_DSN" {
+						foundDSNFailure = true
+					}
 				}
 				if level == "error" && record["level"] != "ERROR" {
 					t.Fatal("error threshold ignored")
@@ -70,6 +74,9 @@ func TestStartupLogging(t *testing.T) {
 			}
 			if !foundError {
 				t.Fatal("startup failure was silent")
+			}
+			if !foundDSNFailure {
+				t.Fatalf("startup did not reach the invalid database DSN: %s", out)
 			}
 		})
 	}

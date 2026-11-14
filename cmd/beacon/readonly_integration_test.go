@@ -105,7 +105,7 @@ func TestReadOnlyBootWritesNothingPostgres(t *testing.T) {
 			_, _ = io.Copy(io.Discard, os.Stdin)
 			os.Exit(3)
 		}()
-		main()
+		runWithArgs(nil)
 		return
 	}
 	dsn := os.Getenv("BEACON_TEST_POSTGRES_DSN")

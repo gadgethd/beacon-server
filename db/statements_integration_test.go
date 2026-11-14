@@ -160,7 +160,7 @@ func TestPgStatStatementsMigrationNoCreatableSchemaPostgres(t *testing.T) {
 			t.Fatalf("%s: %v", stmt, err)
 		}
 	}
-	if err := applyAndRecord(ctx, tx, statementsMigration, string(body)); err != nil {
+	if err := applyAndRecord(ctx, tx, statementsMigration, string(body), false); err != nil {
 		t.Fatalf("migration failed for a role with no creatable schema: %v", err)
 	}
 	var recorded bool

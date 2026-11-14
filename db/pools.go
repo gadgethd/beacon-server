@@ -120,12 +120,41 @@ func (p *Pools) slot(name string) **pgxpool.Pool {
 // opens. On error it closes the pools it already opened. Errors name the pool but never include
 // the DSN, since parse errors can embed its password.
 func OpenPools(ctx context.Context, dsn string, layout planpolicy.Layout, tune ...func(pool string, cfg *pgxpool.Config)) (*Pools, error) {
+	return OpenPoolsWithCredentials(ctx, PoolCredentials{Runtime: dsn}, layout, tune...)
+}
+
+// PoolCredentials keeps migration authority out of the running server. Without
+// Maintenance every pool keeps the upstream single-credential behavior.
+type PoolCredentials struct {
+	Runtime     string
+	Maintenance string
+}
+
+// OpenPoolsWithCredentials assigns the maintenance credential only to Maint;
+// pool sizes, statement settings and API/ingest credentials are unchanged.
+func OpenPoolsWithCredentials(ctx context.Context, credentials PoolCredentials, layout planpolicy.Layout, tune ...func(pool string, cfg *pgxpool.Config)) (*Pools, error) {
 	switch layout {
 	case planpolicy.CustomAll, planpolicy.Split, planpolicy.Single:
 	default:
 		return nil, fmt.Errorf("unknown API plan layout %q", layout)
 	}
-	if strings.Contains(dsn, "pool_max_conns") {
+	if credentials.Maintenance != "" {
+		if strings.TrimSpace(credentials.Runtime) == "" {
+			return nil, fmt.Errorf("POSTGRES_DSN is required with a separate maintenance credential")
+		}
+		runtime, err := pgxpool.ParseConfig(credentials.Runtime)
+		if err != nil {
+			return nil, fmt.Errorf("invalid runtime PostgreSQL connection configuration")
+		}
+		maintenance, err := pgxpool.ParseConfig(credentials.Maintenance)
+		if err != nil {
+			return nil, fmt.Errorf("invalid maintenance PostgreSQL connection configuration")
+		}
+		if runtime.ConnConfig.Host != maintenance.ConnConfig.Host || runtime.ConnConfig.Port != maintenance.ConnConfig.Port || runtime.ConnConfig.Database != maintenance.ConnConfig.Database {
+			return nil, fmt.Errorf("maintenance credentials must use the same PostgreSQL endpoint and database")
+		}
+	}
+	if strings.Contains(credentials.Runtime, "pool_max_conns") || strings.Contains(credentials.Maintenance, "pool_max_conns") {
 		slog.Info("POSTGRES_DSN sets pool_max_conns; the database pool sizes override it", "component", "db", "layout", layout)
 	}
 	p := &Pools{}
@@ -133,6 +162,10 @@ func OpenPools(ctx context.Context, dsn string, layout planpolicy.Layout, tune .
 		size, ok := spec.size[layout]
 		if !ok {
 			continue
+		}
+		dsn := credentials.Runtime
+		if spec.name == PoolMaint && credentials.Maintenance != "" {
+			dsn = credentials.Maintenance
 		}
 		cfg, err := pgxpool.ParseConfig(dsn)
 		if err != nil {

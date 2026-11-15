@@ -6,9 +6,11 @@ package db
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	sqlc "github.com/MeshCore-Beacon/beacon-server/db/sqlc"
 	"github.com/MeshCore-Beacon/beacon-server/internal/api"
+	"github.com/jackc/pgx/v5"
 )
 
 func (s *Store) UpsertIATADetails(ctx context.Context, iata string, name string, lat, lng *float64) error {
@@ -81,7 +83,7 @@ func (s *Store) UpsertRegion(ctx context.Context, slug, name, description string
 		zl = &z
 	}
 	do := int32(displayOrder)
-	return s.q.UpsertRegion(ctx, sqlc.UpsertRegionParams{
+	id, err := s.q.UpsertRegion(ctx, sqlc.UpsertRegionParams{
 		Slug:         slug,
 		Name:         name,
 		Description:  &description,
@@ -90,6 +92,13 @@ func (s *Store) UpsertRegion(ctx context.Context, slug, name, description string
 		CenterLng:    centerLng,
 		ZoomLevel:    zl,
 	})
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return id, err
+	}
+	// An unchanged seed does no UPDATE; resolve its existing ID in a new
+	// statement so a concurrently inserted slug is visible at READ COMMITTED.
+	region, err := s.q.GetRegionBySlug(ctx, slug)
+	return region.ID, err
 }
 
 func (s *Store) ListRegions(ctx context.Context) ([]api.Region, error) {

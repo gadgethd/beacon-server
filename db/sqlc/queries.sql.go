@@ -8503,6 +8503,11 @@ ON CONFLICT (slug) DO UPDATE SET
     zoom_level    = EXCLUDED.zoom_level,
     imported      = FALSE, -- config owns the slug from now on
     updated_at    = NOW()
+WHERE (regions.name, regions.description, regions.display_order,
+       regions.center_lat, regions.center_lng, regions.zoom_level, regions.imported)
+   IS DISTINCT FROM
+      (EXCLUDED.name, EXCLUDED.description, EXCLUDED.display_order,
+       EXCLUDED.center_lat, EXCLUDED.center_lng, EXCLUDED.zoom_level, FALSE)
 RETURNING id
 `
 

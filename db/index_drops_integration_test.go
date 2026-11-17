@@ -159,9 +159,9 @@ func TestReadersAfterIndexDropsPostgres(t *testing.T) {
 
 	before := runShapes(t, ctx, tx, shapes)
 	for name, check := range map[string]func(any) bool{
-		"adverts obs5":         func(v any) bool { return len(v.([]sqlc.ListObserverAdvertsRow)) > 0 },
-		"adverts obs5 2^31":    func(v any) bool { return len(v.([]sqlc.ListObserverAdvertsRow)) > 0 },
-		"delete old observers": func(v any) bool { return len(v.([]uuid.UUID)) > 0 },
+		"adverts obs5":                                func(v any) bool { return len(v.([]sqlc.ListObserverAdvertsRow)) > 0 },
+		"adverts obs5 2^31":                           func(v any) bool { return len(v.([]sqlc.ListObserverAdvertsRow)) > 0 },
+		"delete old observers":                        func(v any) bool { return len(v.([]uuid.UUID)) > 0 },
 		"observer delete blocked by its observations": func(v any) bool { return v.(string) == "23503" },
 	} {
 		if r := before[name][0]; r.err != nil || !check(r.val) {

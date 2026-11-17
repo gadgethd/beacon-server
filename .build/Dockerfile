@@ -1,8 +1,8 @@
 # Copyright 2026 Beacon Contributors
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-# golang:1.26.10-alpine3.24; must satisfy go.mod with GOTOOLCHAIN=local.
-FROM golang@sha256:87c65a688975c0b1d4585d204874c45ca78354670e3a5f11368c5a492303d696 AS builder
+# golang:1.26.11-alpine3.24; must satisfy go.mod with GOTOOLCHAIN=local.
+FROM golang@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download

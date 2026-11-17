@@ -17,8 +17,11 @@ package hub
 
 import (
 	"encoding/json"
-	"log"
+	"fmt"
+	"log/slog"
 	"slices"
+	"sync/atomic"
+	"time"
 )
 
 // EventType identifies the kind of server-push event. These match the
@@ -30,28 +33,45 @@ const (
 	EventObserverStatus    EventType = "observerStatus"
 	EventNodeUpdate        EventType = "nodeUpdate"
 	EventChannelMessage    EventType = "channelMessage"
+
+	// MaxSubscriptionsPerClient is enforced in the hub so every caller, not
+	// just the public WebSocket handler, gets the same hard bound.
+	MaxSubscriptionsPerClient = 16
 )
 
 // Event is a single fan-out unit. Payload is pre-serialised JSON so the
 // broadcast loop never touches encoding — it's done once by the ingest path.
+//
+// PayloadResolved/PayloadWithKey/PayloadResolvedWithKey are optional variants
+// for clients that opted in via configure (resolvedPath, observerPublicKey);
+// nil falls back to Payload. Repeat marks later hearings that only
+// includeRepeats clients receive.
 type Event struct {
-	Type    EventType
-	Payload json.RawMessage
+	Type                   EventType
+	Payload                json.RawMessage
+	PayloadResolved        json.RawMessage
+	PayloadWithKey         json.RawMessage
+	PayloadResolvedWithKey json.RawMessage
 
 	// Routing metadata used by the hub to match subscriptions.
 	// Populated by the ingest layer before calling Broadcast.
 	IATA        string
 	PayloadType uint8
 	ChannelHash string // hex string, non-empty only for channelMessage events
+	RouteType   uint8  // packetObservation only
+	ObserverID  string // packetObservation and observerStatus only
+	// Repeat marks a later hearing of a stored observation; only IncludeRepeats clients get it.
+	Repeat bool
 }
 
 // Scope mirrors the client-side subscribe message. All fields are optional:
 // nil/empty means "no filter on this dimension" (match everything).
-// An empty non-nil slice means "match nothing on this dimension".
 type Scope struct {
 	IATAs         []string
 	PayloadTypes  []uint8
+	RouteTypes    []uint8
 	ChannelHashes []string
+	ObserverIDs   []string
 	Events        []EventType
 }
 
@@ -64,6 +84,40 @@ type Client struct {
 	Send          chan Event
 	laggedCH      chan LaggedNotification
 	subscriptions map[string]Scope // OR semantics: event matches if it matches any scope entry
+
+	// ResolvePath is a connection-wide opt-in (not per-subscription), set via
+	// Configure ("configure" WS messages). Freely toggleable at any
+	// point during the connection's lifetime. Only ever read/written inside
+	// Run(), so it needs no locking despite Client being shared with the WS
+	// goroutines.
+	ResolvePath bool
+	// IncludeObserverKey works like ResolvePath, for observerPublicKey.
+	IncludeObserverKey bool
+	// IncludeRepeats works like ResolvePath, for Repeat events.
+	IncludeRepeats bool
+}
+
+// ClientOptions are the connection-wide settings a "configure" message sets.
+type ClientOptions struct {
+	ResolvePath        bool
+	IncludeObserverKey bool
+	IncludeRepeats     bool
+}
+
+// payloadFor falls back to a narrower variant if the event lacks one.
+func (e Event) payloadFor(c *Client) json.RawMessage {
+	if c.IncludeObserverKey {
+		if c.ResolvePath && e.PayloadResolvedWithKey != nil {
+			return e.PayloadResolvedWithKey
+		}
+		if !c.ResolvePath && e.PayloadWithKey != nil {
+			return e.PayloadWithKey
+		}
+	}
+	if c.ResolvePath && e.PayloadResolved != nil {
+		return e.PayloadResolved
+	}
+	return e.Payload
 }
 
 // matches returns true if the event satisfies at least one of the client's
@@ -96,7 +150,13 @@ func scopeMatches(s Scope, e Event) bool {
 	if len(s.PayloadTypes) > 0 && !slices.Contains(s.PayloadTypes, e.PayloadType) {
 		return false
 	}
-	if len(s.ChannelHashes) > 0 && !slices.Contains(s.ChannelHashes, e.ChannelHash) {
+	if e.Type == EventChannelMessage && len(s.ChannelHashes) > 0 && !slices.Contains(s.ChannelHashes, e.ChannelHash) {
+		return false
+	}
+	if e.Type == EventPacketObservation && len(s.RouteTypes) > 0 && !slices.Contains(s.RouteTypes, e.RouteType) {
+		return false
+	}
+	if (e.Type == EventPacketObservation || e.Type == EventObserverStatus) && len(s.ObserverIDs) > 0 && !slices.Contains(s.ObserverIDs, e.ObserverID) {
 		return false
 	}
 	return true
@@ -108,17 +168,40 @@ type Hub struct {
 	unsubscribe chan unsubscribeMsg
 	remove      chan *Client
 	broadcast   chan Event
+
+	// observerKeyClients counts registered clients with IncludeObserverKey set.
+	observerKeyClients atomic.Int64
+	// repeatClients counts registered clients with IncludeRepeats set.
+	repeatClients atomic.Int64
+	// repeatDrops counts repeats refused because the broadcast channel was busy.
+	repeatDrops     atomic.Int64
+	repeatDropLogAt atomic.Int64 // unix nanos of the last drop log line
+	sent            *sentPaths
 }
 
+// subscribeMsg carries a client registration, a scope subscription, or a
+// configure request — all three go through this single
+// channel, not separate ones, specifically so that Go's same-channel FIFO
+// guarantee orders them relative to NewClient's registration message. A
+// separate "configure" channel raced against registration: select() has no
+// cross-channel ordering guarantee, so a configure sent immediately after
+// NewClient could be (and empirically was, ~50% of the time) processed by
+// Run() before the registration message, silently no-oping since the client
+// wasn't in the clients map yet.
 type subscribeMsg struct {
 	client         *Client
 	scope          Scope
 	subscriptionID string
+	result         chan bool
+
+	isConfigure bool
+	options     ClientOptions
 }
 
 type unsubscribeMsg struct {
 	client         *Client
 	subscriptionID string
+	result         chan bool
 }
 
 // New creates a Hub. Call Run() in a goroutine before using it.
@@ -128,6 +211,7 @@ func New() *Hub {
 		unsubscribe: make(chan unsubscribeMsg, 64),
 		remove:      make(chan *Client, 64),
 		broadcast:   make(chan Event, 512),
+		sent:        newSentPaths(sentPathsTTL, sentPathsMax),
 	}
 }
 
@@ -145,17 +229,44 @@ func (h *Hub) NewClient() *Client {
 	return c
 }
 
-// AddScope appends a subscription scope to a client. Called by the WS handler
-// when it receives a "subscribe" message from the client.
-func (h *Hub) AddScope(c *Client, id string, s Scope) {
-	h.subscribe <- subscribeMsg{client: c, scope: s, subscriptionID: id}
+// AddScope appends a subscription scope to a client and reports whether it was
+// accepted. At most MaxSubscriptionsPerClient distinct IDs may exist for one
+// client. The acknowledgement is serialized through Run so simultaneous
+// callers cannot race past the bound.
+func (h *Hub) AddScope(c *Client, id string, s Scope) bool {
+	result := make(chan bool, 1)
+	h.subscribe <- subscribeMsg{client: c, scope: s, subscriptionID: id, result: result}
+	return <-result
 }
 
-// RemoveScope removes a single subscription by ID. Called by the WS handler
-// when it receives an "unsubscribe" message from the client. Silently ignored
-// if the ID is not found.
-func (h *Hub) RemoveScope(c *Client, id string) {
-	h.unsubscribe <- unsubscribeMsg{client: c, subscriptionID: id}
+// RemoveScope removes a single subscription by ID and reports whether it was
+// present. The acknowledgement preserves ordering with a following AddScope.
+func (h *Hub) RemoveScope(c *Client, id string) bool {
+	result := make(chan bool, 1)
+	h.unsubscribe <- unsubscribeMsg{client: c, subscriptionID: id, result: result}
+	return <-result
+}
+
+// Configure replaces a client's connection-wide options. Unlike scopes, it is
+// not additive.
+func (h *Hub) Configure(c *Client, opts ClientOptions) {
+	h.subscribe <- subscribeMsg{client: c, isConfigure: true, options: opts}
+}
+
+// ObserverKeyWanted lets ingest skip the key variants when nobody wants them.
+func (h *Hub) ObserverKeyWanted() bool {
+	return h.observerKeyClients.Load() > 0
+}
+
+// RepeatsWanted lets ingest skip broadcasting repeats when nobody wants them.
+func (h *Hub) RepeatsWanted() bool {
+	return h.repeatClients.Load() > 0
+}
+
+// MarkSent records every hearing's path and reports whether it is a later, new path for a
+// packet the observer already heard, so broker copies and same-path duplicates never stream.
+func (h *Hub) MarkSent(packetHash, observerID, path []byte) bool {
+	return h.sent.mark(packetHash, observerID, path, time.Now())
 }
 
 // Remove deregisters a client and closes its Send channel.
@@ -169,7 +280,32 @@ func (h *Hub) Broadcast(e Event) {
 	select {
 	case h.broadcast <- e:
 	default:
-		log.Println("hub: broadcast channel full, dropping event")
+		slog.Warn("hub: broadcast channel full, dropping event", "component", "hub")
+	}
+}
+
+// BroadcastRepeat enqueues a repeat event, dropping it once the broadcast channel is half
+// full so repeats never crowd out first hearings.
+func (h *Hub) BroadcastRepeat(e Event) {
+	e.Repeat = true
+	if len(h.broadcast) >= cap(h.broadcast)/2 {
+		h.dropRepeat()
+		return
+	}
+	select {
+	case h.broadcast <- e:
+	default:
+		h.dropRepeat()
+	}
+}
+
+// dropRepeat counts a dropped repeat and logs the running total at most once a minute.
+func (h *Hub) dropRepeat() {
+	total := h.repeatDrops.Add(1)
+	now := time.Now().UnixNano()
+	last := h.repeatDropLogAt.Load()
+	if now-last >= int64(time.Minute) && h.repeatDropLogAt.CompareAndSwap(last, now) {
+		slog.Warn("hub: broadcast channel busy, dropping repeat events", "component", "hub", "dropped_total", total)
 	}
 }
 
@@ -188,47 +324,98 @@ func (h *Hub) Run() {
 		select {
 
 		case msg := <-h.subscribe:
-			if msg.subscriptionID == "" {
+			switch {
+			case msg.subscriptionID == "" && !msg.isConfigure:
 				// Registration with no scope yet (NewClient path).
 				clients[msg.client] = struct{}{}
-			} else {
-				// AddScope path — client must already be registered.
+			case msg.isConfigure:
+				// Configure path — client must already be registered.
 				if _, ok := clients[msg.client]; ok {
-					msg.client.subscriptions[msg.subscriptionID] = msg.scope
+					if msg.client.IncludeObserverKey != msg.options.IncludeObserverKey {
+						if msg.options.IncludeObserverKey {
+							h.observerKeyClients.Add(1)
+						} else {
+							h.observerKeyClients.Add(-1)
+						}
+					}
+					if msg.client.IncludeRepeats != msg.options.IncludeRepeats {
+						if msg.options.IncludeRepeats {
+							h.repeatClients.Add(1)
+						} else {
+							h.repeatClients.Add(-1)
+						}
+					}
+					msg.client.ResolvePath = msg.options.ResolvePath
+					msg.client.IncludeObserverKey = msg.options.IncludeObserverKey
+					msg.client.IncludeRepeats = msg.options.IncludeRepeats
+				}
+			default:
+				// AddScope path — client must already be registered.
+				accepted := false
+				if _, ok := clients[msg.client]; ok {
+					_, exists := msg.client.subscriptions[msg.subscriptionID]
+					if exists || len(msg.client.subscriptions) < MaxSubscriptionsPerClient {
+						msg.client.subscriptions[msg.subscriptionID] = msg.scope
+						accepted = true
+					}
+				}
+				if msg.result != nil {
+					msg.result <- accepted
 				}
 			}
 
 		case msg := <-h.unsubscribe:
+			removed := false
 			if _, ok := clients[msg.client]; ok {
-				delete(msg.client.subscriptions, msg.subscriptionID)
+				if _, exists := msg.client.subscriptions[msg.subscriptionID]; exists {
+					delete(msg.client.subscriptions, msg.subscriptionID)
+					removed = true
+				}
+			}
+			if msg.result != nil {
+				msg.result <- removed
 			}
 
 		case c := <-h.remove:
 			if _, ok := clients[c]; ok {
 				delete(clients, c)
+				if c.IncludeObserverKey {
+					h.observerKeyClients.Add(-1)
+				}
+				if c.IncludeRepeats {
+					h.repeatClients.Add(-1)
+				}
 				close(c.Send)
 				close(c.laggedCH)
 			}
 
 		case evt := <-h.broadcast:
 			for c := range clients {
-				if !c.matches(evt) {
+				if (evt.Repeat && !c.IncludeRepeats) || !c.matches(evt) {
 					continue
 				}
+				outEvt := evt
+				outEvt.Payload = evt.payloadFor(c)
 				select {
-				case c.Send <- evt:
+				case c.Send <- outEvt:
 				default:
+					// Evict the oldest so the newest still goes out.
 					dropped := 1
 					select {
 					case <-c.Send:
 					default:
 					}
 					select {
+					case c.Send <- outEvt:
+					default:
+						dropped++
+					}
+					select {
 					case c.laggedCH <- LaggedNotification{DroppedCount: dropped}:
 					default:
 						// laggedCh itself full; write pump will catch up on next drain
 					}
-					log.Printf("hub: client send buffer full, dropped event type=%s", evt.Type)
+					slog.Warn(fmt.Sprintf("hub: client send buffer full, dropped event type=%s", evt.Type), "component", "hub")
 				}
 			}
 		}

@@ -5,9 +5,12 @@ package db
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 
 	sqlc "github.com/MeshCore-Beacon/beacon-server/db/sqlc"
 	"github.com/MeshCore-Beacon/beacon-server/internal/api"
+	"github.com/jackc/pgx/v5"
 )
 
 func (s *Store) UpsertIATADetails(ctx context.Context, iata string, name string, lat, lng *float64) error {
@@ -49,6 +52,30 @@ func (s *Store) GetIATA(ctx context.Context, iata string) (*api.IATA, error) {
 	}, nil
 }
 
+// GetIATABorder returns the raw GeoJSON Feature JSON for the given IATA's border, or nil if
+// the IATA exists but has no border configured. Returns an error (sql.ErrNoRows-equivalent)
+// if the IATA itself doesn't exist -- same not-found distinction GetIATA makes.
+func (s *Store) GetIATABorder(ctx context.Context, iata string) (json.RawMessage, error) {
+	border, err := s.q.GetIATABorder(ctx, iata)
+	if err != nil {
+		return nil, err
+	}
+	if border == nil {
+		return nil, nil
+	}
+	return json.RawMessage(border), nil
+}
+
+// UpsertIATABorder stores a pre-validated GeoJSON Feature (with bbox already computed) as an
+// IATA's border. Called only from the config-file-driven seeder; see internal/config/seed.go
+// and internal/config/border.go.
+func (s *Store) UpsertIATABorder(ctx context.Context, iata string, border json.RawMessage) error {
+	return s.q.UpsertIATABorder(ctx, sqlc.UpsertIATABorderParams{
+		Iata:   iata,
+		Border: border,
+	})
+}
+
 func (s *Store) UpsertRegion(ctx context.Context, slug, name, description string, displayOrder int, centerLat, centerLng *float64, zoomLevel *int) (int32, error) {
 	var zl *int32
 	if zoomLevel != nil {
@@ -56,7 +83,7 @@ func (s *Store) UpsertRegion(ctx context.Context, slug, name, description string
 		zl = &z
 	}
 	do := int32(displayOrder)
-	return s.q.UpsertRegion(ctx, sqlc.UpsertRegionParams{
+	id, err := s.q.UpsertRegion(ctx, sqlc.UpsertRegionParams{
 		Slug:         slug,
 		Name:         name,
 		Description:  &description,
@@ -65,20 +92,34 @@ func (s *Store) UpsertRegion(ctx context.Context, slug, name, description string
 		CenterLng:    centerLng,
 		ZoomLevel:    zl,
 	})
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return id, err
+	}
+	// An unchanged seed does no UPDATE; resolve its existing ID in a new
+	// statement so a concurrently inserted slug is visible at READ COMMITTED.
+	region, err := s.q.GetRegionBySlug(ctx, slug)
+	return region.ID, err
 }
 
-func (s *Store) ListRegions(ctx context.Context) ([]api.RegionSummary, error) {
+func (s *Store) ListRegions(ctx context.Context) ([]api.Region, error) {
 	rows, err := s.q.ListRegions(ctx)
 	if err != nil {
 		return nil, err
 	}
-	regions := make([]api.RegionSummary, 0, len(rows))
+	regions := make([]api.Region, 0, len(rows))
 	for _, v := range rows {
-		regions = append(regions, api.RegionSummary{
-			ID:   int(v.ID),
-			Slug: v.Slug,
-			Name: v.Name,
-		})
+		region := api.Region{
+			RegionSummary: api.RegionSummary{ID: int(v.ID), Slug: v.Slug, Name: v.Name},
+			Description:   v.Description,
+			CenterLat:     v.CenterLat,
+			CenterLng:     v.CenterLng,
+			IATAs:         v.Iatas,
+		}
+		if v.ZoomLevel != nil {
+			z := int(*v.ZoomLevel)
+			region.ZoomLevel = &z
+		}
+		regions = append(regions, region)
 	}
 	return regions, nil
 }
@@ -141,9 +182,13 @@ func (s *Store) GetRegionBySlug(ctx context.Context, slug string) (*api.Region, 
 	return &result, nil
 }
 
-func (s *Store) UpsertRegionIATA(ctx context.Context, regionID int32, iata string) error {
-	return s.q.UpsertRegionIATA(ctx, sqlc.UpsertRegionIATAParams{
-		RegionID: regionID,
-		Iata:     iata,
-	})
+// SetRegionIATAs makes iatas the region's exact member list.
+func (s *Store) SetRegionIATAs(ctx context.Context, regionID int32, iatas []string) error {
+	if iatas == nil {
+		iatas = []string{}
+	}
+	if err := s.q.DeleteRegionIATAsNotIn(ctx, sqlc.DeleteRegionIATAsNotInParams{RegionID: regionID, Keep: iatas}); err != nil {
+		return err
+	}
+	return s.q.AddRegionIATAs(ctx, sqlc.AddRegionIATAsParams{RegionID: regionID, Iatas: iatas})
 }

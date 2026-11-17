@@ -4,8 +4,12 @@
 package db
 
 import (
+	"cmp"
 	"context"
+	"crypto/md5"
 	"encoding/hex"
+	"slices"
+	"strings"
 	"time"
 
 	sqlc "github.com/MeshCore-Beacon/beacon-server/db/sqlc"
@@ -14,88 +18,193 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+// routePathKey is the route's identity digest: md5 over the comma-joined
+// node UUIDs, matching Postgres's decode(md5(array_to_string(node_ids, ',')), 'hex').
+func routePathKey(nodeIDs []uuid.UUID) []byte {
+	parts := make([]string, len(nodeIDs))
+	for i, id := range nodeIDs {
+		parts[i] = id.String()
+	}
+	sum := md5.Sum([]byte(strings.Join(parts, ",")))
+	return sum[:]
+}
+
 func (s *Store) UpsertKnownRoute(ctx context.Context, nodeIDs []uuid.UUID, hashPrefix [][]byte, iata string, hopCount int32) error {
 	return s.q.UpsertKnownRoute(ctx, sqlc.UpsertKnownRouteParams{
+		PathKey:    routePathKey(nodeIDs),
 		NodeIds:    nodeIDs,
 		HashPrefix: hashPrefix,
 		Iata:       iata,
-		HopCount:   int32(hopCount),
+		HopCount:   hopCount,
 	})
 }
 
-func (s *Store) ListKnownRoutes(ctx context.Context, iata string, hopCount int32, cursor time.Time, limit int32) ([]api.KnownRoute, error) {
-	var cursorTS pgtype.Timestamptz
-	if !cursor.IsZero() {
-		cursorTS = pgtype.Timestamptz{Time: cursor, Valid: true}
-	}
-	rows, err := s.q.ListKnownRoutes(ctx, sqlc.ListKnownRoutesParams{
-		Column1: iata,
-		Column2: hopCount,
-		Column3: cursorTS,
-		Limit:   limit,
-	})
+// ListKnownRoutes pages the routes of iatas, or of every IATA when iatas is empty.
+func (s *Store) ListKnownRoutes(ctx context.Context, iatas []string, hopCount int32, cursor time.Time, cursorID int64, limit int32) ([]api.KnownRoute, error) {
+	limit = s.boundQueryLimit(limit)
+	ctx, cancel := s.readContext(ctx)
+	defer cancel()
+	rows, err := s.listIATAsRouteRows(ctx, iatas, hopCount, cursor, cursorID, limit)
 	if err != nil {
 		return nil, err
 	}
-	ids := collectNodeIDs(rows)
-	nodes, err := s.GetNodesByIDs(ctx, ids)
+	if len(rows) == 0 {
+		return []api.KnownRoute{}, nil
+	}
+	nodes, err := s.GetNodesByIDs(ctx, collectNodeIDs(rows))
 	if err != nil {
 		return nil, err
 	}
 	return toKnownRoutes(rows, nodes), nil
 }
 
-func (s *Store) SearchKnownRoutes(ctx context.Context, iata, fromHash, toHash string) ([]api.KnownRoute, error) {
-	fromBytes, err := hex.DecodeString(fromHash)
+// listIATAsRouteRows runs the one-IATA statements for a single code and the merged pair for several.
+func (s *Store) listIATAsRouteRows(ctx context.Context, iatas []string, hopCount int32, cursor time.Time, cursorID int64, limit int32) ([]knownRouteRow, error) {
+	limit = s.boundQueryLimit(limit)
+	ctx, cancel := s.readContext(ctx)
+	defer cancel()
+	if len(iatas) == 0 {
+		return s.listKnownRouteRows(ctx, "", hopCount, cursor, cursorID, limit)
+	}
+	// No character(3) code is empty or ends in a blank, but bpchar comparison ignores trailing blanks.
+	codes := make([]string, 0, len(iatas))
+	for _, c := range iatas {
+		if c != "" && c == strings.TrimRight(c, " ") && !slices.Contains(codes, c) {
+			codes = append(codes, c)
+		}
+	}
+	switch len(codes) {
+	case 0:
+		return []knownRouteRow{}, nil
+	case 1:
+		return s.listKnownRouteRows(ctx, codes[0], hopCount, cursor, cursorID, limit)
+	}
+	var cursorTS pgtype.Timestamptz
+	if !cursor.IsZero() {
+		cursorTS = pgtype.Timestamptz{Time: cursor, Valid: true}
+	}
+	if hopCount == 0 {
+		return routeRows(s.q.ListKnownRoutesByIATAs(ctx, sqlc.ListKnownRoutesByIATAsParams{Iatas: codes, CursorTs: cursorTS, CursorID: cursorID, PageLimit: limit}))
+	}
+	return routeRows(s.q.ListKnownRoutesByIATAsHop(ctx, sqlc.ListKnownRoutesByIATAsHopParams{Iatas: codes, HopCount: hopCount, CursorTs: cursorTS, CursorID: cursorID, PageLimit: limit}))
+}
+
+// listKnownRouteRows runs the statement for the filter shape. The hop pair is class C, so the
+// PlanRouter sends it unnamed and a rare or absent hop is never planned generically. A zero
+// cursor is NULL; cursorID 0 is a plain timestamp cursor.
+func (s *Store) listKnownRouteRows(ctx context.Context, iata string, hopCount int32, cursor time.Time, cursorID int64, limit int32) ([]knownRouteRow, error) {
+	limit = s.boundQueryLimit(limit)
+	ctx, cancel := s.readContext(ctx)
+	defer cancel()
+	if iata != strings.TrimRight(iata, " ") {
+		return []knownRouteRow{}, nil
+	}
+	var cursorTS pgtype.Timestamptz
+	if !cursor.IsZero() {
+		cursorTS = pgtype.Timestamptz{Time: cursor, Valid: true}
+	}
+	switch {
+	case iata == "" && hopCount == 0:
+		return routeRows(s.q.ListKnownRoutesGlobal(ctx, sqlc.ListKnownRoutesGlobalParams{CursorTs: cursorTS, CursorID: cursorID, PageLimit: limit}))
+	case iata == "":
+		return routeRows(s.q.ListKnownRoutesGlobalHop(ctx, sqlc.ListKnownRoutesGlobalHopParams{HopCount: hopCount, CursorTs: cursorTS, CursorID: cursorID,
+			ReadGroup: s.hopGroupSmall(ctx, hopCount, limit), PageLimit: limit}))
+	case hopCount == 0:
+		return routeRows(s.q.ListKnownRoutesByIATA(ctx, sqlc.ListKnownRoutesByIATAParams{Iata: iata, CursorTs: cursorTS, CursorID: cursorID, PageLimit: limit}))
+	default:
+		return routeRows(s.q.ListKnownRoutesByIATAHop(ctx, sqlc.ListKnownRoutesByIATAHopParams{Iata: iata, HopCount: hopCount, CursorTs: cursorTS, CursorID: cursorID, PageLimit: limit}))
+	}
+}
+
+// routeRows converts any /routes statement's rows; all of them share knownRouteRow's fields.
+func routeRows[T sqlc.ListKnownRoutesGlobalRow | sqlc.ListKnownRoutesGlobalHopRow | sqlc.ListKnownRoutesByIATARow | sqlc.ListKnownRoutesByIATAHopRow |
+	sqlc.ListKnownRoutesByIATAsRow | sqlc.ListKnownRoutesByIATAsHopRow](in []T, err error) ([]knownRouteRow, error) {
 	if err != nil {
 		return nil, err
 	}
-	toBytes, err := hex.DecodeString(toHash)
+	rows := make([]knownRouteRow, len(in))
+	for i, r := range in {
+		rows[i] = knownRouteRow(r)
+	}
+	return rows, nil
+}
+
+// Work bounds for one route search; the query count is fixed, these cap row volume.
+const (
+	routeSearchLimit      = 500  // routes either search returns
+	crossMaxEndpointIATAs = 50   // IATAs a cross endpoint may resolve uniquely in
+	searchMaxCandidates   = 2000 // relays a search endpoint may resolve to
+	crossRouteRowLimit    = 500  // routes loaded per cross endpoint
+	crossMaxHops          = 2000 // hops per side fed to the neighbor query
+	crossMaxStitched      = 5000 // cross routes collected before sort and truncate
+)
+
+func (s *Store) SearchKnownRoutes(ctx context.Context, iatas []string, fromHash, toHash string) ([]api.KnownRoute, error) {
+	fromBytes, toBytes, err := decodeHashPair(fromHash, toHash)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.q.SearchKnownRoutes(ctx, sqlc.SearchKnownRoutesParams{
-		Iata:    iata,
-		Column2: fromBytes,
-		Column3: toBytes,
+	if iatas, err = s.scopeIATAs(ctx, iatas); err != nil {
+		return nil, err
+	}
+	from, err := s.resolveRelays(ctx, iatas, fromBytes)
+	if err != nil {
+		return nil, err
+	}
+	to, err := s.resolveRelays(ctx, iatas, toBytes)
+	if err != nil {
+		return nil, err
+	}
+	if from.count() > searchMaxCandidates || to.count() > searchMaxCandidates {
+		return nil, api.ErrRouteSearchTooBroad
+	}
+	var shared []string
+	for iata := range from {
+		if _, ok := to[iata]; ok {
+			shared = append(shared, iata)
+		}
+	}
+	items := []api.KnownRoute{}
+	if len(shared) == 0 {
+		return items, nil
+	}
+	sqlRows, err := s.q.SearchKnownRoutesByNodes(ctx, sqlc.SearchKnownRoutesByNodesParams{
+		FromNodes: from.nodes(), ToNodes: to.nodes(), Iatas: shared, RowLimit: routeSearchLimit,
 	})
 	if err != nil {
 		return nil, err
 	}
-	ids := collectNodeIDs(rows)
-	nodes, err := s.GetNodesByIDs(ctx, ids)
+	rows := make([]knownRouteRow, len(sqlRows))
+	for i, r := range sqlRows {
+		rows[i] = knownRouteRow(r)
+	}
+	nodes, err := s.GetNodesByIDs(ctx, collectNodeIDs(rows))
 	if err != nil {
 		return nil, err
 	}
-	items := make([]api.KnownRoute, 0, len(rows))
 	for _, r := range rows {
 		fromPos, toPos := -1, -1
-		for i, h := range r.HashPrefix {
-			if fromPos == -1 && hex.EncodeToString(h) == fromHash {
+		for i, id := range r.NodeIds {
+			if fromPos == -1 && slices.Contains(from[r.Iata], id) {
 				fromPos = i
-			}
-			if fromPos != -1 && hex.EncodeToString(h) == toHash {
+			} else if fromPos != -1 && slices.Contains(to[r.Iata], id) {
 				toPos = i
 				break
 			}
 		}
-		if fromPos == -1 || toPos == -1 {
+		if toPos == -1 {
 			continue
 		}
-		nodeIDs := r.NodeIds[fromPos : toPos+1]
-		hashPrefix := r.HashPrefix[fromPos : toPos+1]
-		hops := make([]api.RouteHop, 0, len(nodeIDs))
-		for i, nodeID := range nodeIDs {
-			hop := api.RouteHop{
-				NodeID: nodeID,
-				Node:   nodes[nodeID],
-			}
-			if i < len(hashPrefix) {
-				hop.HashBytes = hex.EncodeToString(hashPrefix[i])
+		hops := make([]api.RouteHop, 0, toPos-fromPos+1)
+		for i := fromPos; i <= toPos; i++ {
+			hop := api.RouteHop{NodeID: r.NodeIds[i], Node: nodes[r.NodeIds[i]]}
+			if i < len(r.HashPrefix) {
+				hop.HashBytes = hex.EncodeToString(r.HashPrefix[i])
 			}
 			hops = append(hops, hop)
 		}
 		items = append(items, api.KnownRoute{
+			PathKey:          hex.EncodeToString(routePathKey(r.NodeIds)),
 			ID:               r.ID,
 			IATA:             r.Iata,
 			HopCount:         int32(len(hops)),
@@ -108,168 +217,333 @@ func (s *Store) SearchKnownRoutes(ctx context.Context, iata, fromHash, toHash st
 	return items, nil
 }
 
-func (s *Store) GetKnownRoutesByNode(ctx context.Context, iata string, nodeID uuid.UUID) ([]api.KnownRoute, error) {
-	rows, err := s.q.GetKnownRoutesByNode(ctx, sqlc.GetKnownRoutesByNodeParams{
-		Iata:    iata,
-		Column2: nodeID,
-	})
-	if err != nil {
-		return nil, err
-	}
-	ids := collectNodeIDs(rows)
-	nodes, err := s.GetNodesByIDs(ctx, ids)
-	if err != nil {
-		return nil, err
-	}
-	return toKnownRoutes(rows, nodes), nil
+// crossRoute is a route containing a searched endpoint at index end.
+type crossRoute struct {
+	api.KnownRoute
+	end int
 }
 
-func (s *Store) GetCrossIATANeighbors(ctx context.Context, nodeID uuid.UUID, iata string) ([]api.NodeNeighbor, error) {
-	rows, err := s.q.GetCrossIATANeighbors(ctx, sqlc.GetCrossIATANeighborsParams{
-		NodeID: nodeID,
-		Iata:   iata,
-	})
-	if err != nil {
-		return nil, err
-	}
-	items := make([]api.NodeNeighbor, 0, len(rows))
-	for _, r := range rows {
-		items = append(items, api.NodeNeighbor{
-			ID:               r.ID,
-			Name:             r.Name,
-			NodeType:         r.NodeType,
-			NodeTypeName:     api.NodeTypeName(r.NodeType),
-			Latitude:         r.Latitude,
-			Longitude:        r.Longitude,
-			IATA:             r.NeighborIata,
-			ObservationCount: r.ObservationCount,
-			LastSeen:         r.LastSeen.Time.UnixMilli(),
-		})
-	}
-	return items, nil
-}
-
-func (s *Store) SearchCrossIATARoutes(ctx context.Context, fromHash, fromIATA, toHash, toIATA string) ([]api.CrossIATARoute, error) {
-	// 1. resolve fromHash in fromIATA
-	fromBytes, err := hex.DecodeString(fromHash)
-	if err != nil {
-		return nil, err
-	}
-	fromResolved, err := s.ResolvePathHashes(ctx, fromIATA, [][]byte{fromBytes})
-	if err != nil {
-		return nil, err
-	}
-	fromEntries := fromResolved[fromHash]
-	if len(fromEntries) != 1 {
-		return nil, nil // not found or ambiguous
-	}
-	fromNodeID := fromEntries[0].NodeID
-
-	// 2. resolve toHash in toIATA
-	toBytes, err := hex.DecodeString(toHash)
-	if err != nil {
-		return nil, err
-	}
-	toResolved, err := s.ResolvePathHashes(ctx, toIATA, [][]byte{toBytes})
-	if err != nil {
-		return nil, err
-	}
-	toEntries := toResolved[toHash]
-	if len(toEntries) != 1 {
-		return nil, nil // not found or ambiguous
-	}
-	toNodeID := toEntries[0].NodeID
-
-	// 3. find routes in source IATA containing fromNode
-	sourceRoutes, err := s.GetKnownRoutesByNode(ctx, fromIATA, fromNodeID)
+func (s *Store) SearchCrossIATARoutes(ctx context.Context, q api.CrossRouteSearch) ([]api.CrossIATARoute, error) {
+	fromBytes, toBytes, err := decodeHashPair(q.FromHash, q.ToHash)
 	if err != nil {
 		return nil, err
 	}
 
-	// 4. find routes in target IATA containing toNode
-	targetRoutes, err := s.GetKnownRoutesByNode(ctx, toIATA, toNodeID)
+	// 1. resolve each hash per IATA, keeping only IATAs where it names exactly one relay
+	fromIATAs, err := s.scopeIATAs(ctx, q.FromIATAs)
 	if err != nil {
 		return nil, err
 	}
-
-	if len(sourceRoutes) == 0 || len(targetRoutes) == 0 {
+	toIATAs, err := s.scopeIATAs(ctx, q.ToIATAs)
+	if err != nil {
+		return nil, err
+	}
+	fromCands, err := s.resolveRelays(ctx, fromIATAs, fromBytes)
+	if err != nil {
+		return nil, err
+	}
+	toCands, err := s.resolveRelays(ctx, toIATAs, toBytes)
+	if err != nil {
+		return nil, err
+	}
+	fromNodes, toNodes := fromCands.unique(), toCands.unique()
+	if len(fromNodes) > crossMaxEndpointIATAs || len(toNodes) > crossMaxEndpointIATAs {
+		return nil, api.ErrRouteSearchTooBroad
+	}
+	if len(fromNodes) == 0 || len(toNodes) == 0 {
 		return nil, nil
 	}
 
-	// 5. find cross-IATA links — nodes at the boundary of source routes
-	//    that have neighbors in the target IATA at the start of target routes
-	var results []api.CrossIATARoute
-
-	// build a set of node IDs that appear in target routes
-	targetNodeSet := make(map[uuid.UUID][]api.RouteHop)
-	for _, tr := range targetRoutes {
-		for _, hop := range tr.Hops {
-			if _, ok := targetNodeSet[hop.NodeID]; !ok {
-				targetNodeSet[hop.NodeID] = tr.Hops
-			}
-		}
+	// 2. routes through each endpoint, in the IATA it resolved in
+	sourceRows, err := s.routesThrough(ctx, fromNodes)
+	if err != nil {
+		return nil, err
 	}
+	targetRows, err := s.routesThrough(ctx, toNodes)
+	if err != nil {
+		return nil, err
+	}
+	if len(sourceRows) == 0 || len(targetRows) == 0 {
+		return nil, nil
+	}
+	nodes, err := s.GetNodesByIDs(ctx, collectNodeIDs(slices.Concat(sourceRows, targetRows)))
+	if err != nil {
+		return nil, err
+	}
+	sources := toCrossRoutes(sourceRows, nodes, fromNodes)
+	targets := toCrossRoutes(targetRows, nodes, toNodes)
 
-	// for each source route, check if any node has a cross-IATA neighbor in targetNodeSet
-	for _, sr := range sourceRoutes {
-		for i, hop := range sr.Hops {
-			crossNeighbors, err := s.GetCrossIATANeighbors(ctx, hop.NodeID, fromIATA)
-			if err != nil {
-				continue
-			}
-			for _, neighbor := range crossNeighbors {
-				if neighbor.IATA != toIATA {
+	// 3. one neighbor query linking source hops from the source endpoint on
+	//    to target hops up to the destination endpoint
+	type targetRef struct{ route, hop int }
+	targetsByNode := make(map[uuid.UUID][]targetRef)
+	var tgtHops []uuid.UUID
+	for ti, tr := range targets {
+		for j := 0; j <= tr.end; j++ {
+			id := tr.Hops[j].NodeID
+			if _, ok := targetsByNode[id]; !ok {
+				if len(tgtHops) >= crossMaxHops {
 					continue
 				}
-				if targetHops, ok := targetNodeSet[neighbor.ID]; ok {
-					// found a cross-IATA link — build the route
-					sourceSegment := sr.Hops[:i+1]
-					targetSegment := extractFromNode(targetHops, neighbor.ID)
+				tgtHops = append(tgtHops, id)
+			}
+			targetsByNode[id] = append(targetsByNode[id], targetRef{ti, j})
+		}
+	}
+	srcSet := make(map[uuid.UUID]struct{})
+	var srcHops []uuid.UUID
+	for _, sr := range sources {
+		for _, hop := range sr.Hops[sr.end:] {
+			if _, ok := srcSet[hop.NodeID]; !ok && len(srcHops) < crossMaxHops {
+				srcSet[hop.NodeID] = struct{}{}
+				srcHops = append(srcHops, hop.NodeID)
+			}
+		}
+	}
+	links, err := s.q.GetNeighborLinks(ctx, sqlc.GetNeighborLinksParams{ANodes: srcHops, BNodes: tgtHops})
+	if err != nil {
+		return nil, err
+	}
+	// adjacency source hop → target hop → newest last_seen, whichever way the row was written
+	adj := make(map[uuid.UUID]map[uuid.UUID]int64)
+	link := func(src, tgt uuid.UUID, seen int64) {
+		_, isSrc := srcSet[src]
+		_, isTgt := targetsByNode[tgt]
+		if !isSrc || !isTgt {
+			return
+		}
+		if adj[src] == nil {
+			adj[src] = make(map[uuid.UUID]int64)
+		}
+		adj[src][tgt] = max(adj[src][tgt], seen)
+	}
+	for _, l := range links {
+		seen := l.LastSeen.Time.UnixMilli()
+		link(l.NodeID, l.NeighborID, seen)
+		link(l.NeighborID, l.NodeID, seen)
+	}
 
-					fromNode := api.ResolvedNode{
-						ID:        hop.NodeID,
-						Latitude:  fromEntries[0].Latitude,
-						Longitude: fromEntries[0].Longitude,
-						PublicKey: hex.EncodeToString(fromEntries[0].PublicKey),
+	// 4. stitch source segment → cross hop → target segment
+	type stitched struct {
+		route api.CrossIATARoute
+		key   string
+	}
+	var found []stitched
+	dedupe := make(map[string]struct{})
+stitch:
+	for _, sr := range sources {
+		for i := sr.end; i < len(sr.Hops); i++ {
+			hop := sr.Hops[i]
+			for tgt, seen := range adj[hop.NodeID] {
+				for _, ref := range targetsByNode[tgt] {
+					tr := targets[ref.route]
+					if tr.IATA == sr.IATA {
+						continue
 					}
-					toNode := api.ResolvedNode{
-						ID:        neighbor.ID,
-						Name:      neighbor.Name,
-						Latitude:  neighbor.Latitude,
-						Longitude: neighbor.Longitude,
+					source := sr.Hops[sr.end : i+1]
+					target := tr.Hops[ref.hop : tr.end+1]
+					key := crossRouteKey(sr.IATA, tr.IATA, source, target)
+					if _, dup := dedupe[key]; dup {
+						continue
 					}
-
-					results = append(results, api.CrossIATARoute{
-						SourceSegment: sourceSegment,
+					dedupe[key] = struct{}{}
+					found = append(found, stitched{key: key, route: api.CrossIATARoute{
+						SourceSegment: source,
 						CrossHop: api.CrossIATAHop{
-							FromNode: fromNode,
-							ToNode:   toNode,
-							FromIATA: fromIATA,
-							ToIATA:   toIATA,
-							LastSeen: neighbor.LastSeen,
+							FromNode: resolvedOrID(hop.Node, hop.NodeID),
+							ToNode:   resolvedOrID(nodes[tgt], tgt),
+							FromIATA: sr.IATA,
+							ToIATA:   tr.IATA,
+							LastSeen: seen,
 						},
-						TargetSegment: targetSegment,
-						TotalHops:     len(sourceSegment) + 1 + len(targetSegment),
-					})
+						TargetSegment: target,
+						TotalHops:     len(source) + len(target),
+					}})
+					if len(found) >= crossMaxStitched {
+						break stitch
+					}
 				}
 			}
 		}
 	}
-
+	slices.SortFunc(found, func(a, b stitched) int {
+		return cmp.Or(
+			cmp.Compare(a.route.TotalHops, b.route.TotalHops),
+			cmp.Compare(b.route.CrossHop.LastSeen, a.route.CrossHop.LastSeen),
+			strings.Compare(a.key, b.key),
+		)
+	})
+	results := make([]api.CrossIATARoute, 0, min(len(found), routeSearchLimit))
+	for _, f := range found[:min(len(found), routeSearchLimit)] {
+		results = append(results, f.route)
+	}
 	return results, nil
 }
 
-// extractFromNode returns the portion of a route starting at the given node.
-func extractFromNode(hops []api.RouteHop, nodeID uuid.UUID) []api.RouteHop {
-	for i, hop := range hops {
-		if hop.NodeID == nodeID {
-			return hops[i:]
-		}
+// relayCandidates maps each IATA to the relays a hash prefix names there.
+type relayCandidates map[string][]uuid.UUID
+
+func (c relayCandidates) count() int {
+	n := 0
+	for _, ids := range c {
+		n += len(ids)
 	}
-	return hops
+	return n
 }
 
-func toKnownRoutes(rows []sqlc.KnownRoute, nodes map[uuid.UUID]*api.ResolvedNode) []api.KnownRoute {
+// unique keeps the IATAs where the hash names exactly one relay.
+func (c relayCandidates) unique() map[string]uuid.UUID {
+	out := make(map[string]uuid.UUID)
+	for iata, ids := range c {
+		if len(ids) == 1 {
+			out[iata] = ids[0]
+		}
+	}
+	return out
+}
+
+func (c relayCandidates) nodes() []uuid.UUID {
+	var nodes []uuid.UUID
+	for _, ids := range c {
+		nodes = append(nodes, ids...)
+	}
+	return nodes
+}
+
+func decodeHashPair(from, to string) ([]byte, []byte, error) {
+	f, err := hex.DecodeString(from)
+	if err != nil {
+		return nil, nil, err
+	}
+	t, err := hex.DecodeString(to)
+	return f, t, err
+}
+
+// scopeIATAs returns iatas, or every known IATA when none are given.
+func (s *Store) scopeIATAs(ctx context.Context, iatas []string) ([]string, error) {
+	if len(iatas) > 0 {
+		return iatas, nil
+	}
+	return s.ListKnownIATAs(ctx)
+}
+
+// resolveRelays maps each IATA to the relays whose hash starts with hash there.
+func (s *Store) resolveRelays(ctx context.Context, iatas []string, hash []byte) (relayCandidates, error) {
+	type pair struct {
+		iata string
+		node uuid.UUID
+	}
+	var rows []pair
+	hashes := [][]byte{hash}
+	switch len(hash) {
+	case 1:
+		rs, err := s.q.ResolveRelayHashPairsP1(ctx, sqlc.ResolveRelayHashPairsP1Params{Iatas: iatas, Hashes: hashes})
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range rs {
+			rows = append(rows, pair{r.Iata, r.NodeID})
+		}
+	case 2:
+		rs, err := s.q.ResolveRelayHashPairsP2(ctx, sqlc.ResolveRelayHashPairsP2Params{Iatas: iatas, Hashes: hashes})
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range rs {
+			rows = append(rows, pair{r.Iata, r.NodeID})
+		}
+	case 3:
+		rs, err := s.q.ResolveRelayHashPairsP3(ctx, sqlc.ResolveRelayHashPairsP3Params{Iatas: iatas, Hashes: hashes})
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range rs {
+			rows = append(rows, pair{r.Iata, r.NodeID})
+		}
+	case 4:
+		rs, err := s.q.ResolveRelayHashPairsP4(ctx, sqlc.ResolveRelayHashPairsP4Params{Iatas: iatas, Hashes: hashes})
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range rs {
+			rows = append(rows, pair{r.Iata, r.NodeID})
+		}
+	default:
+		return nil, nil
+	}
+	c := make(relayCandidates)
+	for _, r := range rows {
+		if !slices.Contains(c[r.iata], r.node) {
+			c[r.iata] = append(c[r.iata], r.node)
+		}
+	}
+	return c, nil
+}
+
+// routesThrough returns routes containing endpoints[iata] in that same IATA.
+func (s *Store) routesThrough(ctx context.Context, endpoints map[string]uuid.UUID) ([]knownRouteRow, error) {
+	iatas := make([]string, 0, len(endpoints))
+	nodes := make([]uuid.UUID, 0, len(endpoints))
+	for iata, id := range endpoints {
+		iatas = append(iatas, iata)
+		nodes = append(nodes, id)
+	}
+	sqlRows, err := s.q.GetKnownRoutesByNodes(ctx, sqlc.GetKnownRoutesByNodesParams{
+		Nodes: nodes, Iatas: iatas, RowLimit: crossRouteRowLimit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]knownRouteRow, len(sqlRows))
+	for i, r := range sqlRows {
+		rows[i] = knownRouteRow(r)
+	}
+	return rows, nil
+}
+
+func toCrossRoutes(rows []knownRouteRow, nodes map[uuid.UUID]*api.ResolvedNode, endpoints map[string]uuid.UUID) []crossRoute {
+	routes := toKnownRoutes(rows, nodes)
+	out := make([]crossRoute, len(routes))
+	for i, r := range routes {
+		out[i] = crossRoute{KnownRoute: r, end: slices.Index(rows[i].NodeIds, endpoints[r.IATA])}
+	}
+	return out
+}
+
+func crossRouteKey(fromIATA, toIATA string, source, target []api.RouteHop) string {
+	var b strings.Builder
+	b.WriteString(fromIATA + toIATA)
+	for _, h := range source {
+		b.WriteString(h.NodeID.String())
+	}
+	b.WriteByte('|')
+	for _, h := range target {
+		b.WriteString(h.NodeID.String())
+	}
+	return b.String()
+}
+
+func resolvedOrID(n *api.ResolvedNode, id uuid.UUID) api.ResolvedNode {
+	if n == nil {
+		return api.ResolvedNode{ID: id}
+	}
+	return *n
+}
+
+// knownRouteRow normalizes the per-query sqlc row structs (identical
+// columns, distinct generated types) so the helpers below share one body.
+type knownRouteRow struct {
+	ID               int64
+	NodeIds          []uuid.UUID
+	HashPrefix       [][]byte
+	Iata             string
+	HopCount         int32
+	FirstSeen        pgtype.Timestamptz
+	LastSeen         pgtype.Timestamptz
+	ObservationCount int64
+}
+
+func toKnownRoutes(rows []knownRouteRow, nodes map[uuid.UUID]*api.ResolvedNode) []api.KnownRoute {
 	items := make([]api.KnownRoute, 0, len(rows))
 	for _, r := range rows {
 		hops := make([]api.RouteHop, 0, len(r.NodeIds))
@@ -284,6 +558,7 @@ func toKnownRoutes(rows []sqlc.KnownRoute, nodes map[uuid.UUID]*api.ResolvedNode
 			hops = append(hops, hop)
 		}
 		items = append(items, api.KnownRoute{
+			PathKey:          hex.EncodeToString(routePathKey(r.NodeIds)),
 			ID:               r.ID,
 			IATA:             r.Iata,
 			HopCount:         r.HopCount,
@@ -296,7 +571,7 @@ func toKnownRoutes(rows []sqlc.KnownRoute, nodes map[uuid.UUID]*api.ResolvedNode
 	return items
 }
 
-func collectNodeIDs(rows []sqlc.KnownRoute) []uuid.UUID {
+func collectNodeIDs(rows []knownRouteRow) []uuid.UUID {
 	seen := make(map[uuid.UUID]struct{})
 	var ids []uuid.UUID
 	for _, r := range rows {

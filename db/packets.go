@@ -4,21 +4,21 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
-	"strings"
+	"log/slog"
 	"time"
 
 	sqlc "github.com/MeshCore-Beacon/beacon-server/db/sqlc"
 	"github.com/MeshCore-Beacon/beacon-server/internal/api"
 	"github.com/MeshCore-Beacon/beacon-server/internal/ingest"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/meshcore-go/meshcore-go"
 )
@@ -59,7 +59,166 @@ func (s *Store) SetPacketDecrypted(ctx context.Context, hash []byte) error {
 	return s.q.SetPacketDecrypted(ctx, hash)
 }
 
-func (s *Store) ListPackets(ctx context.Context, payloadType, routeType int16, iatas []string, scope string, since, until time.Time, cursor int64, limit int32) (api.Page[api.PacketSummary], error) {
+// buildLatestObserverPath fills in PacketLatestObserver's optional path fields from the
+// nullable path_length_byte/hash_size/hop_count/path_bytes columns joined in alongside the
+// latest (or matching) observation. hashSize/hopCount nil means no observation joined at all
+// (only possible via ListPackets/ListPacketsByIATAs' LEFT JOIN LATERAL -- ListPacketsAfterID's
+// inner join always has them, callers there can pass &v.Field directly).
+func buildLatestObserverPath(pathLengthByte, hashSize, hopCount *int16, pathBytes []byte) (*api.PacketPathLength, *string) {
+	if hashSize == nil || hopCount == nil {
+		return nil, nil
+	}
+	raw := ""
+	if pathLengthByte != nil {
+		raw = fmt.Sprintf("%02x", *pathLengthByte)
+	}
+	pathLength := &api.PacketPathLength{
+		Raw:      raw,
+		HashSize: *hashSize,
+		HopCount: *hopCount,
+	}
+	var pathBytesHex *string
+	if pathBytes != nil {
+		s := hex.EncodeToString(pathBytes)
+		pathBytesHex = &s
+	}
+	return pathLength, pathBytesHex
+}
+
+// packetRow is the shared row of the six global packets statements; the other five Row types convert to it.
+type packetRow = sqlc.ListPacketsPageRow
+
+// ListPackets serves the packet list. Region (iatas) requests page by site-local recency (listPacketsByRegion).
+// Every other request is normalised and sent to the one statement for its filter shape. pageCursor wins over
+// cursor wherever a page can return nextPageCursor.
+func (s *Store) ListPackets(ctx context.Context, payloadTypes, routeTypes []int16, iatas []string, scopes []string, since, until time.Time, cursor int64, pageCursor *api.PacketCursor, limit int32) (api.PacketPage, error) {
+	limit = s.boundQueryLimit(limit)
+	ctx, cancel := s.readContext(ctx)
+	defer cancel()
+	if len(iatas) > 0 {
+		return s.listPacketsByRegion(ctx, payloadTypes, routeTypes, iatas, scopes, since, until, cursor, pageCursor, limit)
+	}
+	f, ok := newPacketFilter(payloadTypes, routeTypes, scopes, since, until, cursor, pageCursor, limit)
+	if !ok {
+		return api.PacketPage{Page: api.Page[api.PacketSummary]{Items: []api.PacketSummary{}}}, nil
+	}
+	rows, err := s.listPacketRows(ctx, f)
+	if err != nil {
+		return api.PacketPage{}, err
+	}
+	hasMore := len(rows) > int(limit)
+	if hasMore {
+		rows = rows[:limit]
+	}
+	page := api.PacketPage{Page: api.Page[api.PacketSummary]{
+		Items:   s.packetSummaries(ctx, rows),
+		HasMore: hasMore,
+	}}
+	if hasMore && len(rows) > 0 {
+		last := rows[len(rows)-1]
+		ms := last.LastHeardAt.Time.UnixMilli()
+		next := api.PacketCursor{At: last.LastHeardAt.Time, Hash: last.PacketHash}.String()
+		page.NextCursor = &ms
+		page.NextPageCursor = &next
+	}
+	return page, nil
+}
+
+// listPacketRows runs the statement for f's filter shape and returns up to f.pageLimit rows in
+// (last_heard_at DESC, packet_hash DESC) order.
+func (s *Store) listPacketRows(ctx context.Context, f packetFilter) ([]packetRow, error) {
+	switch {
+	case f.windowed && len(f.scopes) > 0:
+		rows, err := s.q.ListPacketsWindowScoped(ctx, sqlc.ListPacketsWindowScopedParams{
+			SinceTs: f.since, CursorTs: f.cursorTS, CursorHash: f.cursorHash, UntilTs: f.until,
+			PayloadTypes: f.payloadTypes, RouteTypes: f.routeTypes, PageLimit: f.pageLimit, ScopeNames: f.scopes,
+		})
+		return convertPacketRows(rows, err, func(r sqlc.ListPacketsWindowScopedRow) packetRow { return packetRow(r) })
+	case f.windowed:
+		rows, err := s.q.ListPacketsWindow(ctx, sqlc.ListPacketsWindowParams{
+			SinceTs: f.since, CursorTs: f.cursorTS, CursorHash: f.cursorHash, UntilTs: f.until,
+			PayloadTypes: f.payloadTypes, RouteTypes: f.routeTypes, PageLimit: f.pageLimit,
+		})
+		return convertPacketRows(rows, err, func(r sqlc.ListPacketsWindowRow) packetRow { return packetRow(r) })
+	case len(f.scopes) > 0 && f.typed:
+		rows, err := s.q.ListPacketsByScopesTypes(ctx, sqlc.ListPacketsByScopesTypesParams{
+			CursorTs: f.cursorTS, CursorHash: f.cursorHash, PayloadTypes: f.payloadTypes, RouteTypes: f.routeTypes,
+			PageLimit: f.pageLimit, ScopeNames: f.scopes,
+		})
+		return convertPacketRows(rows, err, func(r sqlc.ListPacketsByScopesTypesRow) packetRow { return packetRow(r) })
+	case len(f.scopes) > 0:
+		rows, err := s.q.ListPacketsByScopes(ctx, sqlc.ListPacketsByScopesParams{
+			CursorTs: f.cursorTS, CursorHash: f.cursorHash, PageLimit: f.pageLimit, ScopeNames: f.scopes,
+		})
+		return convertPacketRows(rows, err, func(r sqlc.ListPacketsByScopesRow) packetRow { return packetRow(r) })
+	case f.typed:
+		rows, err := s.q.ListPacketsByTypes(ctx, sqlc.ListPacketsByTypesParams{
+			PayloadTypes: f.payloadTypes, RouteTypes: f.routeTypes, CursorTs: f.cursorTS, CursorHash: f.cursorHash,
+			PageLimit: f.pageLimit,
+		})
+		return convertPacketRows(rows, err, func(r sqlc.ListPacketsByTypesRow) packetRow { return packetRow(r) })
+	}
+	return s.q.ListPacketsPage(ctx, sqlc.ListPacketsPageParams{
+		CursorTs: f.cursorTS, CursorHash: f.cursorHash, PageLimit: f.pageLimit,
+	})
+}
+
+// convertPacketRows converts one statement's rows to packetRow with conv, a plain Go conversion (the Row types
+// share every field name and type).
+func convertPacketRows[R any](rows []R, err error, conv func(R) packetRow) ([]packetRow, error) {
+	if err != nil {
+		return nil, err
+	}
+	out := make([]packetRow, len(rows))
+	for i, r := range rows {
+		out[i] = conv(r)
+	}
+	return out, nil
+}
+
+// packetSummaries builds the API items for global packet rows and resolves their endpoints.
+func (s *Store) packetSummaries(ctx context.Context, rows []packetRow) []api.PacketSummary {
+	items := make([]api.PacketSummary, 0, len(rows))
+	lookups := make([]endpointLookup, 0, len(rows))
+	for _, v := range rows {
+		var lookup endpointLookup
+		item := api.PacketSummary{
+			PacketHash:       hex.EncodeToString(v.PacketHash),
+			PayloadType:      v.PayloadType,
+			PayloadTypeName:  api.PayloadTypeName(v.PayloadType),
+			RouteType:        v.RouteType,
+			RouteTypeName:    api.RouteTypeName(v.RouteType),
+			Scope:            v.ScopeName,
+			FirstHeardAt:     v.FirstHeardAt.Time.UnixMilli(),
+			LastHeardAt:      v.LastHeardAt.Time.UnixMilli(),
+			ObservationCount: int32(v.ObservationCount),
+		}
+		if v.Summary != "" {
+			item.Summary = &v.Summary
+		}
+		if v.LatestObserverID != (uuid.UUID{}) {
+			item.LatestObserver = &api.PacketLatestObserver{
+				ID:          v.LatestObserverID,
+				DisplayName: v.LatestObserverName,
+				IATA:        v.LatestObserverIata,
+			}
+			lookup = endpointLookup{iata: v.LatestObserverIata, ep: parsePacketEndpoints(v.PayloadType, v.RawPayload, v.OriginPubkey)}
+			item.LatestObserver.PathLength, item.LatestObserver.PathBytes = buildLatestObserverPath(
+				&v.LatestObserverPathLengthByte, &v.LatestObserverHashSize, &v.LatestObserverHopCount, v.LatestObserverPathBytes,
+			)
+		}
+		items = append(items, item)
+		lookups = append(lookups, lookup)
+	}
+	s.fillLatestEndpoints(ctx, items, lookups)
+	return items
+}
+
+// SearchPacketsByHashPrefix lists packets whose hash is in [lo, hi); nil hi is unbounded.
+func (s *Store) SearchPacketsByHashPrefix(ctx context.Context, lo, hi []byte, payloadTypes, routeTypes []int16, iatas []string, scopes []string, since, until time.Time, cursor int64, limit int32) (api.Page[api.PacketSummary], error) {
+	limit = s.boundQueryLimit(limit)
+	ctx, cancel := s.readContext(ctx)
+	defer cancel()
 	var cursorTS pgtype.Timestamptz
 	if cursor > 0 {
 		cursorTS = pgtype.Timestamptz{Time: time.UnixMilli(cursor), Valid: true}
@@ -72,16 +231,21 @@ func (s *Store) ListPackets(ctx context.Context, payloadType, routeType int16, i
 	if !until.IsZero() {
 		untilTS = pgtype.Timestamptz{Time: until, Valid: true}
 	}
-	iataFilter := strings.Join(iatas, ",")
-	rows, err := s.q.ListPackets(ctx, sqlc.ListPacketsParams{
-		Column1: payloadType,
-		Column2: routeType,
-		Column3: iataFilter,
-		Column4: sinceTS,
-		Column5: untilTS,
-		Column6: cursorTS,
-		Limit:   limit + 1,
-		Column8: scope,
+	if hi == nil {
+		// Sorts above any stored hash, keeping the range closed for the planner.
+		hi = bytes.Repeat([]byte{0xff}, 64)
+	}
+	rows, err := s.q.SearchPacketsByHashPrefix(ctx, sqlc.SearchPacketsByHashPrefixParams{
+		HashLo:       lo,
+		HashHi:       hi,
+		PayloadTypes: payloadTypes,
+		RouteTypes:   routeTypes,
+		SinceTs:      sinceTS,
+		UntilTs:      untilTS,
+		CursorTs:     cursorTS,
+		ScopeNames:   scopes,
+		Iatas:        iatas,
+		PageLimit:    limit + 1,
 	})
 	if err != nil {
 		return api.Page[api.PacketSummary]{}, err
@@ -91,7 +255,9 @@ func (s *Store) ListPackets(ctx context.Context, payloadType, routeType int16, i
 		rows = rows[:limit]
 	}
 	items := make([]api.PacketSummary, 0, len(rows))
+	lookups := make([]endpointLookup, 0, len(rows))
 	for _, v := range rows {
+		var lookup endpointLookup
 		item := api.PacketSummary{
 			PacketHash:       hex.EncodeToString(v.PacketHash),
 			PayloadType:      v.PayloadType,
@@ -103,15 +269,24 @@ func (s *Store) ListPackets(ctx context.Context, payloadType, routeType int16, i
 			LastHeardAt:      v.LastHeardAt.Time.UnixMilli(),
 			ObservationCount: int32(v.ObservationCount),
 		}
+		if v.Summary != "" {
+			item.Summary = &v.Summary
+		}
 		if v.LatestObserverID != (uuid.UUID{}) {
 			item.LatestObserver = &api.PacketLatestObserver{
 				ID:          v.LatestObserverID,
 				DisplayName: v.LatestObserverName,
 				IATA:        v.LatestObserverIata,
 			}
+			lookup = endpointLookup{iata: v.LatestObserverIata, ep: parsePacketEndpoints(v.PayloadType, v.RawPayload, v.OriginPubkey)}
+			item.LatestObserver.PathLength, item.LatestObserver.PathBytes = buildLatestObserverPath(
+				&v.LatestObserverPathLengthByte, &v.LatestObserverHashSize, &v.LatestObserverHopCount, v.LatestObserverPathBytes,
+			)
 		}
 		items = append(items, item)
+		lookups = append(lookups, lookup)
 	}
+	s.fillLatestEndpoints(ctx, items, lookups)
 	var nextCursor *int64
 	if hasMore && len(items) > 0 {
 		last := items[len(items)-1].LastHeardAt
@@ -125,12 +300,15 @@ func (s *Store) ListPackets(ctx context.Context, payloadType, routeType int16, i
 }
 
 func (s *Store) ListPacketsAfterID(ctx context.Context, afterObservationID int64, payloadType, routeType int16, iatas []string, scope string, limit int32) ([]api.PacketSummary, error) {
-	iataFilter := strings.Join(iatas, ",")
+	limit = s.boundQueryLimit(limit)
+	ctx, cancel := s.readContext(ctx)
+	defer cancel()
+
 	rows, err := s.q.ListPacketsAfterID(ctx, sqlc.ListPacketsAfterIDParams{
 		ID:      afterObservationID,
 		Column2: payloadType,
 		Column3: routeType,
-		Column4: iataFilter,
+		Column4: iatas,
 		Column5: scope,
 		Limit:   limit,
 	})
@@ -138,7 +316,9 @@ func (s *Store) ListPacketsAfterID(ctx context.Context, afterObservationID int64
 		return nil, err
 	}
 	items := make([]api.PacketSummary, 0, len(rows))
+	lookups := make([]endpointLookup, 0, len(rows))
 	for _, v := range rows {
+		var lookup endpointLookup
 		item := api.PacketSummary{
 			PacketHash:       hex.EncodeToString(v.PacketHash),
 			PayloadType:      v.PayloadType,
@@ -150,15 +330,26 @@ func (s *Store) ListPacketsAfterID(ctx context.Context, afterObservationID int64
 			LastHeardAt:      v.LastHeardAt.Time.UnixMilli(),
 			ObservationCount: int32(v.ObservationCount),
 		}
+		if v.Summary != "" {
+			item.Summary = &v.Summary
+		}
 		if v.LatestObserverID != (uuid.UUID{}) {
 			item.LatestObserver = &api.PacketLatestObserver{
 				ID:          v.LatestObserverID,
 				DisplayName: v.LatestObserverName,
 				IATA:        v.LatestObserverIata,
 			}
+			lookup = endpointLookup{iata: v.LatestObserverIata, ep: parsePacketEndpoints(v.PayloadType, v.RawPayload, v.OriginPubkey)}
+			// Inner join here (unlike ListPackets/listPacketsByIATAs' LEFT JOIN LATERAL), so
+			// these are never nil when an observer was joined at all.
+			item.LatestObserver.PathLength, item.LatestObserver.PathBytes = buildLatestObserverPath(
+				&v.LatestObserverPathLengthByte, &v.LatestObserverHashSize, &v.LatestObserverHopCount, v.LatestObserverPathBytes,
+			)
 		}
 		items = append(items, item)
+		lookups = append(lookups, lookup)
 	}
+	s.fillLatestEndpoints(ctx, items, lookups)
 	return items, nil
 }
 
@@ -224,7 +415,10 @@ func (s *Store) GetPacket(ctx context.Context, packetHash []byte) (*api.Packet, 
 		ObservationCount: int32(len(obsRows)),
 		Observations:     make([]api.PacketObservationDetail, 0, len(obsRows)),
 	}
-	minHeardAt := obsRows[0].HeardAt.Time
+	var minHeardAt time.Time
+	if len(obsRows) > 0 {
+		minHeardAt = obsRows[0].HeardAt.Time
+	}
 	if len(obsRows) > 1 {
 		maxHeardAt := obsRows[0].HeardAt.Time
 		for _, v := range obsRows[1:] {
@@ -255,7 +449,28 @@ func (s *Store) GetPacket(ctx context.Context, packetHash []byte) (*api.Packet, 
 		}
 		p.TransportCodes = tc
 	}
-	for _, v := range obsRows {
+	// TRACE payloads repurpose the per-observation Path field to carry per-hop SNR bytes
+	// rather than hashes (see internal/ingest/packet.go), so per-observation PathBytes
+	// can't be resolved the normal way for TRACE. The actual resolvable path is the
+	// trace payload's own embedded PathHashes -- constant for this packet hash, so
+	// compute it once rather than per observation.
+	var traceRawHashes [][]byte
+	if row.PayloadType == int16(meshcore.PayloadTypeTrace) {
+		if trace, err := meshcore.TraceFromBytes(row.RawPayload); err == nil {
+			hashSize := int(trace.PathHashSize())
+			for i := 0; i+hashSize <= len(trace.PathHashes); i += hashSize {
+				traceRawHashes = append(traceRawHashes, trace.PathHashes[i:i+hashSize])
+			}
+		}
+	}
+	// Endpoints resolve against each observation's IATA, all in one batch.
+	ep := parsePacketEndpoints(row.PayloadType, row.RawPayload, row.OriginPubkey)
+	lookups := make([]endpointLookup, len(obsRows))
+	for i, v := range obsRows {
+		lookups[i] = endpointLookup{iata: v.Iata, ep: ep}
+	}
+	sources, destinations := s.resolveEndpoints(ctx, lookups)
+	for i, v := range obsRows {
 		obs := api.PacketObservationDetail{
 			ID:           v.ID,
 			ObserverID:   v.ObserverID,
@@ -267,14 +482,25 @@ func (s *Store) GetPacket(ctx context.Context, packetHash []byte) (*api.Packet, 
 				HashSize: v.HashSize,
 				HopCount: v.HopCount,
 			},
-			RSSI:         v.Rssi,
-			SNR:          v.Snr,
-			SourceBroker: *v.SourceBroker,
+			RSSI: v.Rssi,
+			SNR:  v.Snr,
+		}
+		if v.SourceBroker != nil {
+			obs.SourceBroker = *v.SourceBroker
 		}
 		prop := int32(v.HeardAt.Time.Sub(minHeardAt).Milliseconds())
 		obs.PropagationTimeMs = &prop
 		resolvedPath := []api.ResolvedHop{}
-		if v.PathBytes != nil && v.HashSize > 0 {
+		if row.PayloadType == int16(meshcore.PayloadTypeTrace) {
+			if len(traceRawHashes) > 0 {
+				resolved, err := s.ResolvePathHashes(ctx, v.Iata, traceRawHashes)
+				if err != nil {
+					slog.Error(fmt.Sprintf("store: path resolution failed for observation %d", v.ID), "component", "db", "error", err)
+				} else {
+					resolvedPath = api.BuildResolvedPath(traceRawHashes, resolved)
+				}
+			}
+		} else if v.PathBytes != nil && v.HashSize > 0 {
 			hashSize := int(v.HashSize)
 			hashes := make([][]byte, 0, len(v.PathBytes)/hashSize)
 			for i := 0; i+hashSize <= len(v.PathBytes); i += hashSize {
@@ -282,37 +508,26 @@ func (s *Store) GetPacket(ctx context.Context, packetHash []byte) (*api.Packet, 
 			}
 			resolved, err := s.ResolvePathHashes(ctx, v.Iata, hashes)
 			if err != nil {
-				log.Printf("store: path resolution failed for observation %d: %v", v.ID, err)
+				slog.Error(fmt.Sprintf("store: path resolution failed for observation %d", v.ID), "component", "db", "error", err)
 			} else {
-				for _, hash := range hashes {
-					key := hex.EncodeToString(hash)
-					entries := resolved[key]
-					hop := api.ResolvedHop{
-						Nodes: make([]api.ResolvedNode, 0, len(entries)),
-					}
-					switch len(entries) {
-					case 0:
-						hop.Confidence = "none"
-					case 1:
-						hop.Confidence = "high"
-					default:
-						hop.Confidence = "ambiguous"
-					}
-					for _, e := range entries {
-						hop.Nodes = append(hop.Nodes, api.ResolvedNode{
-							ID:        e.NodeID,
-							Name:      e.Name,
-							Latitude:  e.Latitude,
-							Longitude: e.Longitude,
-							PublicKey: hex.EncodeToString(e.PublicKey),
-						})
-					}
-					resolvedPath = append(resolvedPath, hop)
-				}
+				resolvedPath = api.BuildResolvedPath(hashes, resolved)
 			}
 		}
 		obs.ResolvedPath = resolvedPath
-		if v.PathBytes != nil {
+		obs.ResolvedSource, obs.ResolvedDestination = sources[i], destinations[i]
+		if row.PayloadType == int16(meshcore.PayloadTypeTrace) && len(traceRawHashes) > 0 {
+			// Swap in the trace's own path hashes so PathData's hop-block split (driven by
+			// pathBytes + hashSize) lines up 1:1 with resolvedPath -- the raw SNR bytes
+			// from the physical Path field don't chunk into the same hop count.
+			var traceHashBytes []byte
+			for _, h := range traceRawHashes {
+				traceHashBytes = append(traceHashBytes, h...)
+			}
+			pb := hex.EncodeToString(traceHashBytes)
+			obs.PathBytes = &pb
+			obs.PathLength.HashSize = int16(len(traceRawHashes[0]))
+			obs.PathLength.HopCount = int16(len(traceRawHashes))
+		} else if v.PathBytes != nil {
 			pb := hex.EncodeToString(v.PathBytes)
 			obs.PathBytes = &pb
 		}
@@ -347,8 +562,9 @@ func (s *Store) UpsertIATA(ctx context.Context, iata string) error {
 	return s.q.UpsertIATA(ctx, iata)
 }
 
-func (s *Store) InsertObservation(ctx context.Context, o ingest.InsertObservationParams) (bool, error) {
-	params := sqlc.InsertObservationParams{
+// observationParams maps an observation to the statement's parameters.
+func observationParams(o ingest.InsertObservationParams) sqlc.InsertObservationParams {
+	return sqlc.InsertObservationParams{
 		PacketHash:        o.PacketHash,
 		ObserverID:        o.ObserverID,
 		Iata:              o.IATA,
@@ -365,22 +581,58 @@ func (s *Store) InsertObservation(ctx context.Context, o ingest.InsertObservatio
 		BandwidthKhz:      &o.BandwidthKHz,
 		CodingRate:        &o.CodingRate,
 		SourceBroker:      &o.SourceBroker,
+		PayloadType:       &o.PayloadType,
+		AirtimeMs:         o.AirtimeMs,
 	}
-	row, err := s.q.InsertObservation(ctx, params)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil // conflict, not an error
-	}
-	if err != nil {
-		return false, err
-	}
-	return row.ID != 0, nil
 }
 
+func (s *Store) InsertObservation(ctx context.Context, o ingest.InsertObservationParams) (bool, int64, error) {
+	params := observationParams(o)
+	row, err := s.q.InsertObservation(ctx, params)
+	if err == nil {
+		if row.Inserted {
+			s.obsCounts.Add(o.HeardAt, o.ObserverID, o.IATA)
+			s.obsActivity.Add(o.HeardAt, o.ObserverID, o.PayloadType, o.RSSI, o.SNR, o.AirtimeMs)
+		}
+		return row.Inserted, row.ObservationCount, nil
+	}
+	// Whatever failed, region pages stop reading packet_sites before anything else is written, until a reconcile
+	// that begins after this has repaired it.
+	s.readModels.invalidatePacketSites("an observation insert with its site row failed")
+	// A cancelled request and a packet that is gone (23503, which today's statement hits too) are returned as
+	// they are. Any other failure stores the observation without its site row and leaves the row to the
+	// reconcile.
+	var pgErr *pgconn.PgError
+	if ctx.Err() != nil || (errors.As(err, &pgErr) && pgErr.Code == "23503") {
+		return false, 0, err
+	}
+	slog.Warn("observation site row failed; storing the observation without it", "component", "db",
+		"packet_hash", hex.EncodeToString(o.PacketHash), "iata", o.IATA, "error", err)
+	fallback, err := s.q.InsertObservationUnsited(ctx, sqlc.InsertObservationUnsitedParams(params))
+	// Again once the fallback has returned: a reconcile that took its snapshot before this commit must not be the
+	// one that restores trust.
+	s.readModels.invalidatePacketSites("an observation was stored without its site row")
+	if err != nil {
+		return false, 0, err
+	}
+	if fallback.Inserted {
+		s.obsCounts.Add(o.HeardAt, o.ObserverID, o.IATA)
+		s.obsActivity.Add(o.HeardAt, o.ObserverID, o.PayloadType, o.RSSI, o.SNR, o.AirtimeMs)
+	}
+	return fallback.Inserted, fallback.ObservationCount, nil
+}
+
+// ListNodeObservations pages a node's observations newest packet first, then newest observation within it.
+// cursor is the previous page's last observation id; one that no longer exists returns an empty last page.
 func (s *Store) ListNodeObservations(ctx context.Context, nodeID uuid.UUID, cursor int64, limit int32) (api.Page[api.PacketObservationSummary], error) {
+	limit = s.boundQueryLimit(limit)
+	ctx, cancel := s.readContext(ctx)
+	defer cancel()
+
 	rows, err := s.q.ListNodeObservations(ctx, sqlc.ListNodeObservationsParams{
-		ID:      nodeID,
-		Column2: cursor,
-		Limit:   limit + 1,
+		NodeID:   nodeID,
+		Cursor:   cursor,
+		RowLimit: limit + 1, // one extra to detect hasMore
 	})
 	if err != nil {
 		return api.Page[api.PacketObservationSummary]{}, err
@@ -415,10 +667,14 @@ func (s *Store) ListNodeObservations(ctx context.Context, nodeID uuid.UUID, curs
 	}, nil
 }
 
-func (s *Store) GetPacketObservationCount(ctx context.Context, packetHash []byte) (int64, error) {
-	return s.q.GetPacketObservationCount(ctx, packetHash)
-}
+// Small because each packet cascades to its observations.
+const packetDeleteBatch = 1000
 
 func (s *Store) DeleteOldPackets(ctx context.Context, cutoff time.Time) error {
-	return s.q.DeleteOldPackets(ctx, pgtype.Timestamptz{Time: cutoff, Valid: true})
+	return deleteInBatches(ctx, packetDeleteBatch, func(ctx context.Context, n int32) (int64, error) {
+		return s.q.DeleteOldPackets(ctx, sqlc.DeleteOldPacketsParams{
+			Cutoff:    pgtype.Timestamptz{Time: cutoff, Valid: true},
+			BatchSize: n,
+		})
+	})
 }

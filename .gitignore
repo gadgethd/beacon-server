@@ -5,3 +5,7 @@ config.yaml
 docker-compose.yml
 notes.md
 roadmap.md
+
+binaries/
+cover.out
+planguard-out/

@@ -10,7 +10,8 @@ import (
 	"github.com/meshcore-go/meshcore-go"
 )
 
-// NodeNeighbor represents a neighboring node relationship observed in a given IATA.
+// NodeNeighbor is the internal node-neighbor read model. Use ToPublicNodeNeighbor
+// before returning it from a public handler.
 type NodeNeighbor struct {
 	ID               uuid.UUID `json:"id"`
 	Name             *string   `json:"name,omitempty"`
@@ -23,6 +24,46 @@ type NodeNeighbor struct {
 	ObservationCount int64     `json:"observationCount"`
 	FirstSeen        int64     `json:"firstSeen"` // epoch ms
 	LastSeen         int64     `json:"lastSeen"`  // epoch ms
+	SNR              *float32  `json:"snr,omitempty"`
+}
+
+// NodeActivityPoint is one hour of hearings of a node's packets; an average is null without samples.
+type NodeActivityPoint struct {
+	T            int64    `json:"t"` // hour start, epoch ms
+	Observations int64    `json:"observations"`
+	SNRAvg       *float64 `json:"snrAvg"`
+	RSSIAvg      *float64 `json:"rssiAvg"`
+	HopAvg       *float64 `json:"hopAvg"`
+}
+
+// NodeActivitySummary covers the whole window: each average is its sum over its samples.
+type NodeActivitySummary struct {
+	Observations int64    `json:"observations"`
+	SNRAvg       *float64 `json:"snrAvg"`
+	RSSIAvg      *float64 `json:"rssiAvg"`
+	HopAvg       *float64 `json:"hopAvg"`
+}
+
+// NodeActivityLatest is the node's most recently heard packet.
+type NodeActivityLatest struct {
+	PacketHash string `json:"packetHash"` // hex
+	HeardAt    int64  `json:"heardAt"`    // epoch ms
+}
+
+// NodeActivity is the hourly heard-activity of the packets a node originated.
+type NodeActivity struct {
+	WindowStart int64 `json:"windowStart"` // inclusive, epoch ms, on the hour
+	WindowEnd   int64 `json:"windowEnd"`   // exclusive, epoch ms; the last hour is still filling
+	GeneratedAt int64 `json:"generatedAt"`
+	// Hours before rolledUntil come from rollups and from rawFrom on from raw rows; when rawFrom is later, the
+	// hours between are uncovered, not quiet.
+	RolledUntil *int64 `json:"rolledUntil,omitempty"` // end of the newest complete rollup hour, epoch ms
+	RawFrom     *int64 `json:"rawFrom,omitempty"`     // start of the raw tail, epoch ms
+
+	Range   string              `json:"range"`
+	Summary NodeActivitySummary `json:"summary"`
+	Points  []NodeActivityPoint `json:"points"` // ascending, only hours with observations
+	Latest  *NodeActivityLatest `json:"latest"`
 }
 
 // NodeIATA represents a single IATA code and the last time the node was heard there.
@@ -31,25 +72,65 @@ type NodeIATA struct {
 	LastHeard int64  `json:"lastHeard"` // epoch ms
 }
 
-// NodeSummary is the minimal node representation used in list responses.
-type NodeSummary struct {
-	ID                 uuid.UUID  `json:"id"`
-	PublicKey          string     `json:"publicKey"` // hex-encoded Ed25519 public key
-	NodeType           int16      `json:"nodeType"`  // 1=companion, 2=repeater, 3=room_server, 4=sensor
-	NodeTypeName       string     `json:"nodeTypeName"`
-	Name               *string    `json:"name,omitempty"`
-	IsObserver         bool       `json:"isObserver"`             // true if this node is also a known observer
-	ObserverID         *uuid.UUID `json:"observerId,omitempty"`   // UUID of the associated observer row, if any
-	Latitude           *float64   `json:"lat,omitempty"`          // decimal degrees, from advert AppData
-	Longitude          *float64   `json:"lng,omitempty"`          // decimal degrees, from advert AppData
-	Radio              *string    `json:"radio,omitempty"`        // shorthand: "freqMhz,bwKhz,sf" e.g. "910.5,62.5,7"
-	IATAs              []NodeIATA `json:"iatas"`                  // IATAs where this node has been heard, with last heard timestamps
-	DefaultScope       *string    `json:"defaultScope,omitempty"` // most recently matched transport scope name e.g. "#bc"
-	KnownNeighborCount int64      `json:"knownNeighborCount"`
+// NodePage adds the exact cursor while keeping the numeric one for older clients.
+type NodePage struct {
+	Page[NodeSummary]
+	NextPageCursor *string `json:"nextPageCursor,omitempty"`
+	// Sort and Order name the order the items are in ("lastSeen" "desc" unless a sort was asked
+	// for), so a client can tell this server sorted; older servers leave them out.
+	Sort  string `json:"sort,omitempty" enums:"lastSeen,name,type,neighbors"`
+	Order string `json:"order,omitempty" enums:"asc,desc"`
 }
 
-// Node is the full node representation including firmware capability flags,
-// location source, and timing metadata.
+// Node list orders besides the default, last seen newest first.
+const (
+	NodeSortName      = "name"
+	NodeSortType      = "type"
+	NodeSortNeighbors = "neighbors"
+	// NodeSortLastSeen reaches the sorted list only oldest first; newest first is the default list.
+	NodeSortLastSeen = "lastSeen"
+)
+
+// NodeSort orders a node list by name, type, neighbour count or last seen.
+type NodeSort struct {
+	By         string
+	Descending bool
+}
+
+// ValidNodeSort reports whether by is a NodeSort order.
+func ValidNodeSort(by string) bool {
+	return by == NodeSortName || by == NodeSortType || by == NodeSortNeighbors || by == NodeSortLastSeen
+}
+
+// NodeSummary is the minimal node representation used in list responses.
+type NodeSummary struct {
+	ID                 uuid.UUID   `json:"id"`
+	PublicKey          string      `json:"publicKey"` // hex-encoded Ed25519 public key
+	NodeType           int16       `json:"nodeType"`  // 1=companion, 2=repeater, 3=room_server, 4=sensor
+	NodeTypeName       string      `json:"nodeTypeName"`
+	Name               *string     `json:"name,omitempty"`
+	IsObserver         bool        `json:"isObserver"`             // true if this node is also a known observer
+	ObserverID         *uuid.UUID  `json:"observerId,omitempty"`   // UUID of the associated observer row, if any
+	Latitude           *float64    `json:"lat,omitempty"`          // decimal degrees, from advert AppData
+	Longitude          *float64    `json:"lng,omitempty"`          // decimal degrees, from advert AppData
+	Radio              *string     `json:"radio,omitempty"`        // shorthand: "freqMhz,bwKhz,sf" e.g. "910.525,62.5,7"
+	IATAs              []NodeIATA  `json:"iatas"`                  // IATAs where this node has been heard, with last heard timestamps
+	DefaultScope       *string     `json:"defaultScope,omitempty"` // most recently matched transport scope name e.g. "#bc"
+	KnownNeighborCount int64       `json:"knownNeighborCount"`
+	NeighborIDs        []uuid.UUID `json:"neighborIds,omitempty"` // only populated when the list request opts in; see ?neighbors=true
+	LastSeen           int64       `json:"lastSeen"`              // epoch ms
+	// Stale is true when the node hasn't been seen (last_seen) within the configured
+	// staleness window (default 24h; internal/config.ResolvedConfig.NodeStaleThreshold).
+	// Applies to every node type, unlike ClockDriftSeconds/ClockOutOfSync on Node, which
+	// are repeater/room-server only.
+	Stale bool `json:"stale"`
+	// PossiblyForeign compares a repeater's stored position with this server's
+	// configured IATA border union. Omitted when disabled, unknown, or not repeater.
+	PossiblyForeign *bool `json:"possiblyForeign,omitempty"`
+}
+
+// Node is the internal full node read model. It may contain database metadata;
+// use ToPublicNode before serializing it in a public response.
 type Node struct {
 	NodeSummary
 	LocationSource          *string        `json:"locationSource,omitempty"`     // "advert" or "manual"
@@ -58,12 +139,246 @@ type Node struct {
 	SupportsMultibyteTraces bool           `json:"supportsMultibyteTraces"`      // firmware >= 1.11.0; detected via trace hash size
 	MinFirmwareVersion      *string        `json:"minFirmwareVersion,omitempty"` // derived from capability flags
 	FirstSeen               int64          `json:"firstSeen"`                    // epoch ms
-	LastSeen                int64          `json:"lastSeen"`                     // epoch ms
 	Metadata                any            `json:"metadata,omitempty"`           // raw JSONB metadata
 	Neighbors               []NodeNeighbor `json:"neighbors"`
+	// Clock drift, repeaters/room servers only (nodeType 2/3); omitted entirely for other
+	// node types or when no qualifying advert has been measured yet. Device minus server
+	// time, in seconds, from the advert's self-reported timestamp: +ve = device ahead.
+	// clockCheckedAt is the server receive time of the advert this was measured from (same
+	// moment as lastAdvertAt). clockOutOfSync is |clockDriftSeconds| exceeding a configured
+	// threshold (default 5m) -- see internal/config.ResolvedConfig.ClockDriftThreshold.
+	ClockDriftSeconds *int   `json:"clockDriftSeconds,omitempty"`
+	ClockOutOfSync    *bool  `json:"clockOutOfSync,omitempty"`
+	ClockCheckedAt    *int64 `json:"clockCheckedAt,omitempty"`
+	// MeshMapper is what MeshMapper's repeater list says about this key; omitted when
+	// the import is off or MeshMapper doesn't list it.
+	MeshMapper *MeshMapperRepeater `json:"meshmapper,omitempty"`
+}
+
+// MeshMapperRepeater is imported from MeshMapper's get_repeaters.php. Times are epoch ms.
+// Text fields are admin-entered free text: escape before rendering.
+type MeshMapperRepeater struct {
+	IATA            string                  `json:"iata,omitempty"` // region of its latest advert, per MeshMapper
+	FetchedAt       int64                   `json:"fetchedAt"`      // when Beacon last fetched this list
+	Site            MeshMapperSite          `json:"site"`
+	Carpeater       bool                    `json:"carpeater"` // mobile repeater: its position moves
+	Admins          []string                `json:"admins"`
+	Scopes          []MeshMapperScope       `json:"scopes"`
+	ScopesCheckedAt *int64                  `json:"scopesCheckedAt,omitempty"` // set (with empty scopes) when it answered with none
+	DefaultScope    *MeshMapperDefaultScope `json:"defaultScope,omitempty"`
+}
+
+// MeshMapperSite holds admin-entered site details; each field is omitted when unset.
+type MeshMapperSite struct {
+	Power       *string  `json:"power,omitempty"`
+	Hardware    *string  `json:"hardware,omitempty"`
+	Antenna     *string  `json:"antenna,omitempty"`
+	HeightM     *float64 `json:"heightM,omitempty"`     // antenna above ground
+	HeightASLM  *float64 `json:"heightAslM,omitempty"`  // antenna above mean sea level
+	PowerSource *string  `json:"powerSource,omitempty"` // mains, solar, battery or poe
+	Notes       *string  `json:"notes,omitempty"`
+}
+
+// MeshMapperScope is one scope the repeater was confirmed carrying, and how.
+type MeshMapperScope struct {
+	Scope           string  `json:"scope"`
+	ObservedAt      *int64  `json:"observedAt,omitempty"` // seen forwarding scoped traffic
+	ObservedPackets *int64  `json:"observedPackets,omitempty"`
+	Proof           *string `json:"proof,omitempty"`      // multibyte or floor
+	ReportedAt      *int64  `json:"reportedAt,omitempty"` // an observer asked it
+	UploadedAt      *int64  `json:"uploadedAt,omitempty"` // a wardriver's app asked it
+}
+
+// MeshMapperDefaultScope is the scope the repeater puts on its own adverts.
+type MeshMapperDefaultScope struct {
+	Name      *string `json:"name,omitempty"`
+	State     string  `json:"state"` // named, unknown (set but not nameable yet) or none
+	UpdatedAt *int64  `json:"updatedAt,omitempty"`
+	Source    *string `json:"source,omitempty"` // advert or reported
+}
+
+// PublicNodeIATA is the public representation of a node's IATA history.
+type PublicNodeIATA struct {
+	IATA      string `json:"iata"`
+	LastHeard int64  `json:"lastHeard"` // epoch ms
+}
+
+// PublicNodeNeighbor is the public representation of a neighboring node
+// relationship. It intentionally contains no database-only fields.
+type PublicNodeNeighbor struct {
+	ID               uuid.UUID `json:"id"`
+	Name             *string   `json:"name,omitempty"`
+	PublicKey        string    `json:"publicKey"`
+	NodeType         int16     `json:"nodeType"`
+	NodeTypeName     string    `json:"nodeTypeName"`
+	Latitude         *float64  `json:"lat,omitempty"`
+	Longitude        *float64  `json:"lng,omitempty"`
+	IATA             string    `json:"iata"`
+	ObservationCount int64     `json:"observationCount"`
+	FirstSeen        int64     `json:"firstSeen"` // epoch ms
+	LastSeen         int64     `json:"lastSeen"`  // epoch ms
+	SNR              *float32  `json:"snr,omitempty"`
+}
+
+// PublicNodeSummary is the allowlisted node representation returned by public
+// list endpoints.
+type PublicNodeSummary struct {
+	LastSeen           int64            `json:"lastSeen"`
+	PossiblyForeign    *bool            `json:"possiblyForeign,omitempty"`
+	ID                 uuid.UUID        `json:"id"`
+	PublicKey          string           `json:"publicKey"`
+	NodeType           int16            `json:"nodeType"`
+	NodeTypeName       string           `json:"nodeTypeName"`
+	Name               *string          `json:"name,omitempty"`
+	IsObserver         bool             `json:"isObserver"`
+	ObserverID         *uuid.UUID       `json:"observerId,omitempty"`
+	Latitude           *float64         `json:"lat,omitempty"`
+	Longitude          *float64         `json:"lng,omitempty"`
+	Radio              *string          `json:"radio,omitempty"`
+	IATAs              []PublicNodeIATA `json:"iatas"`
+	DefaultScope       *string          `json:"defaultScope,omitempty"`
+	KnownNeighborCount int64            `json:"knownNeighborCount"`
+	NeighborIDs        []uuid.UUID      `json:"neighborIds,omitempty"`
+	Stale              bool             `json:"stale"`
+}
+
+// PublicNode is the allowlisted node detail response. Metadata is deliberately
+// absent: Node.Metadata is an internal/raw JSONB field and must not cross the
+// public API boundary.
+type PublicNode struct {
+	MeshMapper *MeshMapperRepeater `json:"meshmapper,omitempty"`
+	PublicNodeSummary
+	LocationSource          *string              `json:"locationSource,omitempty"`
+	LastAdvertAt            *int64               `json:"lastAdvertAt,omitempty"`
+	SupportsMultibytePaths  bool                 `json:"supportsMultibytePaths"`
+	SupportsMultibyteTraces bool                 `json:"supportsMultibyteTraces"`
+	MinFirmwareVersion      *string              `json:"minFirmwareVersion,omitempty"`
+	FirstSeen               int64                `json:"firstSeen"`
+	LastSeen                int64                `json:"lastSeen"`
+	Neighbors               []PublicNodeNeighbor `json:"neighbors"`
+	ClockDriftSeconds       *int                 `json:"clockDriftSeconds,omitempty"`
+	ClockOutOfSync          *bool                `json:"clockOutOfSync,omitempty"`
+	ClockCheckedAt          *int64               `json:"clockCheckedAt,omitempty"`
+}
+
+// ToPublicNodeIATA maps an internal node IATA record to its public DTO.
+func ToPublicNodeIATA(iata NodeIATA) PublicNodeIATA {
+	return PublicNodeIATA{
+		IATA:      iata.IATA,
+		LastHeard: iata.LastHeard,
+	}
+}
+
+// ToPublicNodeNeighbor maps an internal node-neighbor record to its public DTO.
+func ToPublicNodeNeighbor(neighbor NodeNeighbor) PublicNodeNeighbor {
+	return PublicNodeNeighbor{
+		ID:               neighbor.ID,
+		Name:             neighbor.Name,
+		PublicKey:        neighbor.PublicKey,
+		NodeType:         neighbor.NodeType,
+		NodeTypeName:     neighbor.NodeTypeName,
+		Latitude:         neighbor.Latitude,
+		Longitude:        neighbor.Longitude,
+		IATA:             neighbor.IATA,
+		ObservationCount: neighbor.ObservationCount,
+		FirstSeen:        neighbor.FirstSeen,
+		LastSeen:         neighbor.LastSeen,
+		SNR:              neighbor.SNR,
+	}
+}
+
+// ToPublicNodeSummary maps an internal node summary to its public DTO.
+func ToPublicNodeSummary(node NodeSummary) PublicNodeSummary {
+	public := PublicNodeSummary{
+		PossiblyForeign:    node.PossiblyForeign,
+		LastSeen:           node.LastSeen,
+		ID:                 node.ID,
+		PublicKey:          node.PublicKey,
+		NodeType:           node.NodeType,
+		NodeTypeName:       node.NodeTypeName,
+		Name:               node.Name,
+		IsObserver:         node.IsObserver,
+		ObserverID:         node.ObserverID,
+		Latitude:           node.Latitude,
+		Longitude:          node.Longitude,
+		Radio:              node.Radio,
+		DefaultScope:       node.DefaultScope,
+		KnownNeighborCount: node.KnownNeighborCount,
+		Stale:              node.Stale,
+	}
+	if node.IATAs != nil {
+		public.IATAs = make([]PublicNodeIATA, len(node.IATAs))
+		for i, iata := range node.IATAs {
+			public.IATAs[i] = ToPublicNodeIATA(iata)
+		}
+	}
+	if node.NeighborIDs != nil {
+		public.NeighborIDs = append([]uuid.UUID(nil), node.NeighborIDs...)
+	}
+	return public
+}
+
+// ToPublicNodePage maps a node list page to an allowlisted public page.
+type PublicNodePage struct {
+	Page[PublicNodeSummary]
+	NextPageCursor *string `json:"nextPageCursor,omitempty"`
+	Sort           string  `json:"sort,omitempty"`
+	Order          string  `json:"order,omitempty"`
+}
+
+func ToPublicNodePage(page NodePage) PublicNodePage {
+	public := PublicNodePage{Page: Page[PublicNodeSummary]{NextCursor: page.NextCursor, HasMore: page.HasMore}, NextPageCursor: page.NextPageCursor, Sort: page.Sort, Order: page.Order}
+	if page.Items != nil {
+		public.Items = make([]PublicNodeSummary, len(page.Items))
+		for i, node := range page.Items {
+			public.Items[i] = ToPublicNodeSummary(node)
+		}
+	}
+	return public
+}
+
+// ToPublicNode maps an internal full node read model to its public DTO.
+func ToPublicNode(node *Node) *PublicNode {
+	if node == nil {
+		return nil
+	}
+	public := &PublicNode{
+		MeshMapper:              node.MeshMapper,
+		PublicNodeSummary:       ToPublicNodeSummary(node.NodeSummary),
+		LocationSource:          node.LocationSource,
+		LastAdvertAt:            node.LastAdvertAt,
+		SupportsMultibytePaths:  node.SupportsMultibytePaths,
+		SupportsMultibyteTraces: node.SupportsMultibyteTraces,
+		MinFirmwareVersion:      node.MinFirmwareVersion,
+		FirstSeen:               node.FirstSeen,
+		LastSeen:                node.LastSeen,
+		ClockDriftSeconds:       node.ClockDriftSeconds,
+		ClockOutOfSync:          node.ClockOutOfSync,
+		ClockCheckedAt:          node.ClockCheckedAt,
+	}
+	if node.Neighbors != nil {
+		public.Neighbors = make([]PublicNodeNeighbor, len(node.Neighbors))
+		for i, neighbor := range node.Neighbors {
+			public.Neighbors[i] = ToPublicNodeNeighbor(neighbor)
+		}
+	}
+	return public
+}
+
+// ToPublicNodeNeighbors maps internal node-neighbor records to public DTOs.
+func ToPublicNodeNeighbors(neighbors []NodeNeighbor) []PublicNodeNeighbor {
+	if neighbors == nil {
+		return nil
+	}
+	public := make([]PublicNodeNeighbor, len(neighbors))
+	for i, neighbor := range neighbors {
+		public[i] = ToPublicNodeNeighbor(neighbor)
+	}
+	return public
 }
 
 // NodeTypeName returns a human-readable name for a node type integer.
+// NOTE: truncation is fine here until there are at least over 200 types of node
 func NodeTypeName(t int16) string {
 	switch byte(t) {
 	case meshcore.AdvertTypeChat:

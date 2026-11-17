@@ -4,9 +4,15 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
+
+	"github.com/MeshCore-Beacon/beacon-server/internal/api"
+	"github.com/go-chi/chi/v5"
 )
 
 func TestParseIATAs_Single(t *testing.T) {
@@ -61,5 +67,55 @@ func TestParseIATAs_Uppercase(t *testing.T) {
 	result := parseIATAs(r)
 	if len(result) != 1 || result[0] != "YVR" {
 		t.Errorf("expected [YVR], got %v", result)
+	}
+}
+
+func TestListRegions_OK(t *testing.T) {
+	lat, zoom := 49.2, 7
+	r := chi.NewRouter()
+	r.Get("/regions", listRegions(stubReader{
+		listRegions: func(_ context.Context) ([]api.Region, error) {
+			return []api.Region{
+				{RegionSummary: api.RegionSummary{ID: 1, Slug: "bc", Name: "British Columbia"}, CenterLat: &lat, ZoomLevel: &zoom, IATAs: []string{"YVR", "YYJ"}},
+				{RegionSummary: api.RegionSummary{ID: 2, Slug: "empty", Name: "Empty"}, IATAs: []string{}},
+			}, nil
+		},
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/regions", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+	want := `[{"id":1,"slug":"bc","name":"British Columbia","centerLat":49.2,"zoomLevel":7,"iatas":["YVR","YYJ"]},` +
+		`{"id":2,"slug":"empty","name":"Empty","iatas":[]}]`
+	if got := strings.TrimSpace(w.Body.String()); got != want {
+		t.Errorf("body = %s\nwant %s", got, want)
+	}
+}
+
+func TestGetRegion_OK(t *testing.T) {
+	r := chi.NewRouter()
+	r.Get("/regions/{regionId}", getRegion(stubReader{
+		getRegion: func(_ context.Context, id int32) (*api.Region, error) {
+			return &api.Region{RegionSummary: api.RegionSummary{ID: int(id), Slug: "bc"}}, nil
+		},
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/regions/1", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+}
+
+func TestGetRegion_InvalidID(t *testing.T) {
+	r := chi.NewRouter()
+	r.Get("/regions/{regionId}", getRegion(stubReader{}))
+	req := httptest.NewRequest(http.MethodGet, "/regions/notanint", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
 	}
 }

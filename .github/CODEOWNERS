@@ -1,7 +1,2 @@
-# Default owners for everything
-* @446564
-
-
-# EXAMPLE Specific ownership by directory
-#/internal/ingest/ @your-github-username
-#/db/ @your-github-username
+# Every change to main needs a review from the repo owner
+* @MrAlders0n

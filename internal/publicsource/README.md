@@ -27,3 +27,10 @@ fixture permission/data contract is checked by `test-beacon-reader.mjs` there.
 This package's tests exercise native frame decoding plus cursor, snapshot,
 fresh-generation fence, rejection accounting and transaction cleanup behavior
 without a live database.
+
+`TestPublicSourceFixtureIntegration` is opt-in. UKMesh's disposable fixture owner
+supplies `BEACON_PUBLIC_FIXTURE_URL` only as an environment variable, phase
+`BEACON_PUBLIC_FIXTURE_PHASE=ready|unavailable`, and the two expected UUIDs in
+`BEACON_PUBLIC_FIXTURE_OBSERVATIONS`. It checks true pgx limit-one paging,
+read-only snapshot settings, rejection accounting and the unavailable-policy
+case. It provisions nothing and never prints the connection string.

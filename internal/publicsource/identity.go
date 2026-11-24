@@ -19,6 +19,20 @@ import (
 
 const UIDVersion = "wire-sha256-v1"
 
+// CanonicalUID is the single Go owner of UKMesh wire-sha256-v1. Routing and
+// relay framing are excluded; payload type/version and payload are retained.
+func CanonicalUID(packet *meshcore.Packet) ([sha256.Size]byte, error) {
+	if packet == nil || len(packet.Payload) == 0 {
+		return [sha256.Size]byte{}, ErrContract
+	}
+	h := sha256.New()
+	h.Write([]byte{packet.Header & 0xfc})
+	h.Write(packet.Payload)
+	var uid [sha256.Size]byte
+	copy(uid[:], h.Sum(nil))
+	return uid, nil
+}
+
 // Reason describes a rejected observation without logging its raw frame.
 type Reason string
 
@@ -35,6 +49,7 @@ const (
 	InvalidGroupText   Reason = "invalid-group-text"
 	UIDMismatch        Reason = "uid-mismatch"
 	PathMismatch       Reason = "path-metadata-mismatch"
+	OutsideNetwork     Reason = "outside-network"
 )
 
 // Observation retains the upstream UUID, including multiple hearings that
@@ -138,10 +153,8 @@ func verify(row sourceRow) Outcome {
 	if err != nil {
 		return reject(InvalidGroupText)
 	}
-	h := sha256.New()
-	h.Write([]byte{packet.Header & 0xfc})
-	h.Write(packet.Payload)
-	if !bytes.Equal(h.Sum(nil), row.uid) {
+	uid, err := CanonicalUID(packet)
+	if err != nil || !bytes.Equal(uid[:], row.uid) {
 		return reject(UIDMismatch)
 	}
 	if len(row.paths) != int(packet.PathHashCount()) || row.pathSize == nil || *row.pathSize != int32(packet.PathHashSize()) {

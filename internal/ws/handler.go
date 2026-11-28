@@ -81,7 +81,16 @@ type Access struct {
 	AllowedOrigins []string
 	RequireOrigin  bool
 	Tickets        *wsticket.Issuer
+	// Authority is optional. A private listener binds every write to the epoch
+	// authorized at connect; ordinary Beacon traffic leaves it nil.
+	Authority func(context.Context) (string, error)
 }
+
+type RegionReader interface {
+	GetRegion(context.Context, int32) (*api.Region, error)
+	GetRegionBySlug(context.Context, string) (*api.Region, error)
+}
+type authorityKey struct{}
 
 const (
 	idleTimeout                  = 60 * time.Second
@@ -111,19 +120,20 @@ type Options struct {
 
 // Server owns one WebSocket handler's limiters and metrics.
 type Server struct {
-	serve   http.HandlerFunc
-	h       *hub.Hub
-	reader  api.Reader
-	limits  *admissionLimiter
-	clients *clientIPResolver
-	metrics wsMetrics
-	now     func() time.Time
-	idleFor time.Duration
-	writeIn time.Duration
+	serve     http.HandlerFunc
+	h         *hub.Hub
+	reader    RegionReader
+	authority func(context.Context) (string, error)
+	limits    *admissionLimiter
+	clients   *clientIPResolver
+	metrics   wsMetrics
+	now       func() time.Time
+	idleFor   time.Duration
+	writeIn   time.Duration
 }
 
 // NewHandler constructs the bounded WebSocket handler.
-func NewHandler(h *hub.Hub, reader api.Reader, opts Options) *Server {
+func NewHandler(h *hub.Hub, reader RegionReader, opts Options) *Server {
 	if opts.MaxConnections <= 0 {
 		opts.MaxConnections = 1000
 	}
@@ -152,17 +162,17 @@ func NewHandler(h *hub.Hub, reader api.Reader, opts Options) *Server {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.serve(w, r) }
-func NewTransport(h *hub.Hub, reader api.Reader, limits Limits, access Access) *Server {
+func NewTransport(h *hub.Hub, reader RegionReader, limits Limits, access Access) *Server {
 	if limits.MaxConnections <= 0 {
 		limits.MaxConnections = 1000
 	}
-	s := &Server{h: h, reader: reader, now: time.Now, idleFor: pingTimeout, writeIn: writeTimeout}
+	s := &Server{h: h, reader: reader, authority: access.Authority, now: time.Now, idleFor: pingTimeout, writeIn: writeTimeout}
 	s.serve = s.handler(limits, access)
 	return s
 }
 
 // Handler serves the current protocol with bounded admission, messages and writes.
-func Handler(h *hub.Hub, reader api.Reader, limits Limits, access Access) http.HandlerFunc {
+func Handler(h *hub.Hub, reader RegionReader, limits Limits, access Access) http.HandlerFunc {
 	s := NewTransport(h, reader, limits, access)
 	return s.ServeHTTP
 }
@@ -181,6 +191,7 @@ func (s *Server) handler(limits Limits, access Access) http.HandlerFunc {
 	attempts := httprate.NewRateLimiter(limits.MaxConnectsPerMinute, time.Minute,
 		httprate.WithResponseHeaders(httprate.ResponseHeaders{RetryAfter: "Retry-After"}))
 	return func(w http.ResponseWriter, r *http.Request) {
+		var epoch string
 		if s.clients != nil {
 			clone := r.Clone(r.Context())
 			clone.RemoteAddr = s.clients.clientIP(r)
@@ -209,6 +220,14 @@ func (s *Server) handler(limits Limits, access Access) http.HandlerFunc {
 			return
 		}
 		defer global.release("all")
+		if s.authority != nil {
+			var err error
+			epoch, err = s.authority(r.Context())
+			if err != nil || epoch == "" {
+				http.Error(w, "public authority unavailable", http.StatusServiceUnavailable)
+				return
+			}
+		}
 		opts := plainOpts
 		if compressesFor(r.UserAgent()) {
 			opts = acceptOpts
@@ -239,6 +258,9 @@ func (s *Server) handler(limits Limits, access Access) http.HandlerFunc {
 			}
 		}
 		write := func(ctx context.Context, kind websocket.MessageType, payload []byte) error {
+			if err := s.checkAuthority(ctx, conn); err != nil {
+				return err
+			}
 			writeCtx, cancelWrite := context.WithTimeout(ctx, s.writeIn)
 			defer cancelWrite()
 			err := conn.Write(writeCtx, kind, payload)
@@ -254,7 +276,7 @@ func (s *Server) handler(limits Limits, access Access) http.HandlerFunc {
 		client := h.NewClient()
 		defer h.Remove(client)
 
-		ctx, cancel := context.WithCancel(r.Context())
+		ctx, cancel := context.WithCancel(context.WithValue(r.Context(), authorityKey{}, epoch))
 		defer cancel()
 
 		// Send hello
@@ -274,6 +296,13 @@ func (s *Server) handler(limits Limits, access Access) http.HandlerFunc {
 
 		// Write pump: forward hub events to the WS connection.
 		go func() {
+			defer cancel()
+			var tick <-chan time.Time
+			if s.authority != nil {
+				ticker := time.NewTicker(time.Second)
+				defer ticker.Stop()
+				tick = ticker.C
+			}
 			budget := newSendBudget(limits.SendBytesPerSecond, limits.SendBurstBytes, time.Now())
 			budgetDropped := 0
 			var lastNotice time.Time
@@ -292,6 +321,10 @@ func (s *Server) handler(limits Limits, access Access) http.HandlerFunc {
 				select {
 				case evt, ok := <-client.Send:
 					if !ok {
+						return
+					}
+					if s.authority != nil && evt.AuthorityToken != epoch {
+						_ = conn.Close(websocket.StatusPolicyViolation, "public authority changed")
 						return
 					}
 					msg := map[string]any{
@@ -335,6 +368,10 @@ func (s *Server) handler(limits Limits, access Access) http.HandlerFunc {
 						return
 					}
 
+				case <-tick:
+					if err := s.checkAuthority(ctx, conn); err != nil {
+						return
+					}
 				case <-ctx.Done():
 					return
 				}
@@ -670,6 +707,9 @@ func normalizeStrings(values []string, normalize func(string) string) ([]string,
 }
 
 func (s *Server) writeJSON(ctx context.Context, conn *websocket.Conn, value any) error {
+	if err := s.checkAuthority(ctx, conn); err != nil {
+		return err
+	}
 	payload, err := json.Marshal(value)
 	if err != nil {
 		return err
@@ -683,6 +723,19 @@ func (s *Server) writeJSON(ctx context.Context, conn *websocket.Conn, value any)
 		return err
 	}
 	s.metrics.messagesSent.Add(1)
+	return nil
+}
+
+func (s *Server) checkAuthority(ctx context.Context, conn *websocket.Conn) error {
+	if s.authority == nil {
+		return nil
+	}
+	expected, _ := ctx.Value(authorityKey{}).(string)
+	current, err := s.authority(ctx)
+	if err != nil || expected == "" || current != expected {
+		_ = conn.Close(websocket.StatusPolicyViolation, "public authority changed")
+		return errors.New("public websocket authority unavailable")
+	}
 	return nil
 }
 

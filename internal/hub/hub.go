@@ -16,6 +16,7 @@
 package hub
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -47,6 +48,9 @@ const (
 // nil falls back to Payload. Repeat marks later hearings that only
 // includeRepeats clients receive.
 type Event struct {
+	// AuthorityToken binds private projection events to their authorized epoch.
+	// Standalone ingest leaves it empty; it is never serialized to clients.
+	AuthorityToken         string
 	Type                   EventType
 	Payload                json.RawMessage
 	PayloadResolved        json.RawMessage
@@ -168,6 +172,7 @@ type Hub struct {
 	unsubscribe chan unsubscribeMsg
 	remove      chan *Client
 	broadcast   chan Event
+	done        chan struct{}
 
 	// observerKeyClients counts registered clients with IncludeObserverKey set.
 	observerKeyClients atomic.Int64
@@ -211,6 +216,7 @@ func New() *Hub {
 		unsubscribe: make(chan unsubscribeMsg, 64),
 		remove:      make(chan *Client, 64),
 		broadcast:   make(chan Event, 512),
+		done:        make(chan struct{}),
 		sent:        newSentPaths(sentPathsTTL, sentPathsMax),
 	}
 }
@@ -225,7 +231,12 @@ func (h *Hub) NewClient() *Client {
 	}
 	// We don't add it to the map here; we send it through the channel so
 	// Run() is the only goroutine that touches the client map.
-	h.subscribe <- subscribeMsg{client: c}
+	select {
+	case h.subscribe <- subscribeMsg{client: c}:
+	case <-h.done:
+		close(c.Send)
+		close(c.laggedCH)
+	}
 	return c
 }
 
@@ -235,22 +246,43 @@ func (h *Hub) NewClient() *Client {
 // callers cannot race past the bound.
 func (h *Hub) AddScope(c *Client, id string, s Scope) bool {
 	result := make(chan bool, 1)
-	h.subscribe <- subscribeMsg{client: c, scope: s, subscriptionID: id, result: result}
-	return <-result
+	select {
+	case h.subscribe <- subscribeMsg{client: c, scope: s, subscriptionID: id, result: result}:
+	case <-h.done:
+		return false
+	}
+	select {
+	case accepted := <-result:
+		return accepted
+	case <-h.done:
+		return false
+	}
 }
 
 // RemoveScope removes a single subscription by ID and reports whether it was
 // present. The acknowledgement preserves ordering with a following AddScope.
 func (h *Hub) RemoveScope(c *Client, id string) bool {
 	result := make(chan bool, 1)
-	h.unsubscribe <- unsubscribeMsg{client: c, subscriptionID: id, result: result}
-	return <-result
+	select {
+	case h.unsubscribe <- unsubscribeMsg{client: c, subscriptionID: id, result: result}:
+	case <-h.done:
+		return false
+	}
+	select {
+	case accepted := <-result:
+		return accepted
+	case <-h.done:
+		return false
+	}
 }
 
 // Configure replaces a client's connection-wide options. Unlike scopes, it is
 // not additive.
 func (h *Hub) Configure(c *Client, opts ClientOptions) {
-	h.subscribe <- subscribeMsg{client: c, isConfigure: true, options: opts}
+	select {
+	case h.subscribe <- subscribeMsg{client: c, isConfigure: true, options: opts}:
+	case <-h.done:
+	}
 }
 
 // ObserverKeyWanted lets ingest skip the key variants when nobody wants them.
@@ -272,7 +304,10 @@ func (h *Hub) MarkSent(packetHash, observerID, path []byte) bool {
 // Remove deregisters a client and closes its Send channel.
 // Safe to call from any goroutine (e.g. the WS handler's defer).
 func (h *Hub) Remove(c *Client) {
-	h.remove <- c
+	select {
+	case h.remove <- c:
+	case <-h.done:
+	}
 }
 
 // Broadcast enqueues an event for fan-out. Safe to call from any goroutine.
@@ -314,14 +349,27 @@ func (h *Hub) dropRepeat() {
 //
 // It processes registrations, removals, and broadcasts sequentially so the
 // clients map needs no locking.
-func (h *Hub) Run() {
+func (h *Hub) Run() { h.RunContext(context.Background()) }
+
+// RunContext supplies owned shutdown for opt-in listeners. Run retains the
+// standalone server's existing lifetime.
+func (h *Hub) RunContext(ctx context.Context) {
+	defer close(h.done)
 	// clients maps a *Client to the set of subscription IDs it holds.
 	// We use a map[*Client]struct{} for O(1) presence checks and O(n)
 	// broadcast — fine at the scale Beacon targets.
 	clients := make(map[*Client]struct{})
+	defer func() {
+		for client := range clients {
+			close(client.Send)
+			close(client.laggedCH)
+		}
+	}()
 
 	for {
 		select {
+		case <-ctx.Done():
+			return
 
 		case msg := <-h.subscribe:
 			switch {
